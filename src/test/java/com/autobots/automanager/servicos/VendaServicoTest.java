@@ -54,9 +54,11 @@ class VendaServicoTest {
     private static final long EMPRESA = 1L;
     private static final long CLIENTE = 3L;
     private static final long OUTRO_CLIENTE = 4L;
-    private static final long FUNCIONARIO = 6L;
-    private static final long FUNCIONARIO_DE_OUTRA = 7L;
-    private static final long FUNCIONARIO_SEM_EMPRESA = 8L;
+    private static final long VENDEDOR = 6L;
+    private static final long VENDEDOR_DE_OUTRA = 7L;
+    private static final long VENDEDOR_SEM_EMPRESA = 8L;
+    private static final long GERENTE = 9L;
+    private static final long ADMINISTRADOR = 12L;
     private static final long VEICULO = 50L;
     private static final long VEICULO_DE_OUTRO = 51L;
     private static final long MERCADORIA = 10L;
@@ -135,7 +137,7 @@ class VendaServicoTest {
         VendaCadastroDto dto = new VendaCadastroDto();
         dto.setIdentificacao("V-1");
         dto.setClienteId(CLIENTE);
-        dto.setFuncionarioId(FUNCIONARIO);
+        dto.setFuncionarioId(VENDEDOR);
         dto.setVeiculoId(VEICULO);
         dto.setItens(List.of(itemDto(MERCADORIA, 4L)));
         dto.setServicoIds(List.of(SERVICO));
@@ -147,7 +149,7 @@ class VendaServicoTest {
         venda.setId(VENDA);
         venda.setIdentificacao("V-1");
         venda.setCliente(cliente);
-        venda.setFuncionario(usuarioRepositorio.findById(FUNCIONARIO).orElseThrow());
+        venda.setFuncionario(usuarioRepositorio.findById(VENDEDOR).orElseThrow());
         venda.setVeiculo(veiculo);
         ItemVenda item = new ItemVenda();
         item.setVenda(venda);
@@ -182,9 +184,11 @@ class VendaServicoTest {
 
         cliente = usuario(CLIENTE, PerfilUsuario.CLIENTE, null);
         Usuario outroCliente = usuario(OUTRO_CLIENTE, PerfilUsuario.CLIENTE, null);
-        usuario(FUNCIONARIO, PerfilUsuario.FUNCIONARIO, empresa);
-        usuario(FUNCIONARIO_DE_OUTRA, PerfilUsuario.FUNCIONARIO, outraEmpresa);
-        usuario(FUNCIONARIO_SEM_EMPRESA, PerfilUsuario.FUNCIONARIO, null);
+        usuario(VENDEDOR, PerfilUsuario.VENDEDOR, empresa);
+        usuario(VENDEDOR_DE_OUTRA, PerfilUsuario.VENDEDOR, outraEmpresa);
+        usuario(VENDEDOR_SEM_EMPRESA, PerfilUsuario.VENDEDOR, null);
+        usuario(GERENTE, PerfilUsuario.GERENTE, empresa);
+        usuario(ADMINISTRADOR, PerfilUsuario.ADMINISTRADOR, empresa);
 
         veiculo = novoVeiculo(VEICULO, cliente);
         novoVeiculo(VEICULO_DE_OUTRO, outroCliente);
@@ -221,9 +225,9 @@ class VendaServicoTest {
     @DisplayName("listarPorUsuario: busca as vendas em que o usuario e cliente ou funcionario")
     void listarPorUsuario() {
         List<Venda> vendas = List.of(new Venda());
-        when(repositorio.findByClienteIdOrFuncionarioIdOrderById(FUNCIONARIO, FUNCIONARIO)).thenReturn(vendas);
+        when(repositorio.findByClienteIdOrFuncionarioIdOrderById(VENDEDOR, VENDEDOR)).thenReturn(vendas);
 
-        assertSame(vendas, servico.listarPorUsuario(FUNCIONARIO));
+        assertSame(vendas, servico.listarPorUsuario(VENDEDOR));
     }
 
     @Test
@@ -260,7 +264,7 @@ class VendaServicoTest {
         assertEquals("V-1", criada.getIdentificacao());
         assertNotNull(criada.getCadastro());
         assertSame(cliente, criada.getCliente());
-        assertEquals(FUNCIONARIO, criada.getFuncionario().getId());
+        assertEquals(VENDEDOR, criada.getFuncionario().getId());
         assertSame(veiculo, criada.getVeiculo());
         assertSame(mercadoria, criada.getItens().get(0).getMercadoria());
         assertSame(criada, criada.getItens().get(0).getVenda());
@@ -290,25 +294,49 @@ class VendaServicoTest {
     @DisplayName("criar: recusa cliente sem o perfil CLIENTE")
     void criarClienteSemPerfil() {
         VendaCadastroDto dto = cadastro();
-        dto.setClienteId(FUNCIONARIO);
+        dto.setClienteId(VENDEDOR);
 
         criarRecusado(dto, "O usuario de id 6 nao possui o perfil CLIENTE");
     }
 
     @Test
-    @DisplayName("criar: recusa funcionario sem o perfil FUNCIONARIO")
+    @DisplayName("criar: recusa funcionario sem perfil de funcionario")
     void criarFuncionarioSemPerfil() {
         VendaCadastroDto dto = cadastro();
         dto.setFuncionarioId(CLIENTE);
 
-        criarRecusado(dto, "O usuario de id 3 nao possui o perfil FUNCIONARIO");
+        criarRecusado(dto, "O usuario de id 3 nao possui perfil de funcionario: ADMINISTRADOR, GERENTE ou VENDEDOR");
+    }
+
+    @Test
+    @DisplayName("criar: aceita funcionario com perfil GERENTE vinculado a empresa")
+    void criarComFuncionarioGerente() {
+        when(repositorio.save(any(Venda.class))).thenAnswer(chamada -> chamada.getArgument(0));
+        VendaCadastroDto dto = cadastro();
+        dto.setFuncionarioId(GERENTE);
+
+        Venda criada = servico.criar(EMPRESA, dto);
+
+        assertEquals(GERENTE, criada.getFuncionario().getId());
+    }
+
+    @Test
+    @DisplayName("criar: aceita funcionario com perfil ADMINISTRADOR vinculado a empresa")
+    void criarComFuncionarioAdministrador() {
+        when(repositorio.save(any(Venda.class))).thenAnswer(chamada -> chamada.getArgument(0));
+        VendaCadastroDto dto = cadastro();
+        dto.setFuncionarioId(ADMINISTRADOR);
+
+        Venda criada = servico.criar(EMPRESA, dto);
+
+        assertEquals(ADMINISTRADOR, criada.getFuncionario().getId());
     }
 
     @Test
     @DisplayName("criar: recusa funcionario vinculado a outra empresa")
     void criarFuncionarioDeOutraEmpresa() {
         VendaCadastroDto dto = cadastro();
-        dto.setFuncionarioId(FUNCIONARIO_DE_OUTRA);
+        dto.setFuncionarioId(VENDEDOR_DE_OUTRA);
 
         criarRecusado(dto, "O funcionario de id 7 nao esta vinculado a empresa de id 1");
     }
@@ -317,7 +345,7 @@ class VendaServicoTest {
     @DisplayName("criar: recusa funcionario sem empresa")
     void criarFuncionarioSemEmpresa() {
         VendaCadastroDto dto = cadastro();
-        dto.setFuncionarioId(FUNCIONARIO_SEM_EMPRESA);
+        dto.setFuncionarioId(VENDEDOR_SEM_EMPRESA);
 
         criarRecusado(dto, "O funcionario de id 8 nao esta vinculado a empresa de id 1");
     }
@@ -486,7 +514,7 @@ class VendaServicoTest {
         vendaExistente();
 
         VendaAtualizacaoDto funcionario = new VendaAtualizacaoDto();
-        funcionario.setFuncionarioId(FUNCIONARIO_DE_OUTRA);
+        funcionario.setFuncionarioId(VENDEDOR_DE_OUTRA);
         assertThrows(IllegalArgumentException.class, () -> servico.atualizar(VENDA, funcionario));
 
         VendaAtualizacaoDto mercadorias = new VendaAtualizacaoDto();

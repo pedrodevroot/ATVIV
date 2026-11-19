@@ -32,7 +32,7 @@ public class UsuarioCadastroDto {
     @Past(message = "A data de nascimento deve estar no passado")
     private Date dataNascimento;
 
-    @NotEmpty(message = "Informe ao menos um perfil: CLIENTE, FUNCIONARIO ou FORNECEDOR")
+    @NotEmpty(message = "Informe ao menos um perfil: ADMINISTRADOR, GERENTE, VENDEDOR, CLIENTE ou FORNECEDOR")
     private Set<@NotNull(message = "Os perfis nao podem conter valor nulo") PerfilUsuario> perfis = new HashSet<>();
 
     @Valid

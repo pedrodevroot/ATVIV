@@ -12,6 +12,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -82,6 +84,19 @@ public class ManipuladorDeExcecoes {
     public ResponseEntity<ErroResposta> tratarArgumentoInvalido(
             IllegalArgumentException excecao, HttpServletRequest requisicao) {
         return montar(HttpStatus.BAD_REQUEST, excecao.getMessage(), null, requisicao);
+    }
+
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ErroResposta> tratarFalhaDeAutenticacao(
+            AuthenticationException excecao, HttpServletRequest requisicao) {
+        return montar(HttpStatus.UNAUTHORIZED,
+                "Nome de usuario ou senha invalidos, ou credencial inativa", null, requisicao);
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErroResposta> tratarAcessoNegado(
+            AccessDeniedException excecao, HttpServletRequest requisicao) {
+        return montar(HttpStatus.FORBIDDEN, RespostaSeguranca.ACESSO_NEGADO, null, requisicao);
     }
 
     private ResponseEntity<ErroResposta> montar(HttpStatus status, String mensagem,

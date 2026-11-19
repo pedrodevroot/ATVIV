@@ -15,6 +15,6 @@ public class CredencialUsuarioSenhaCadastroDto extends CredencialCadastroDto {
     private String nomeUsuario;
 
     @NotBlank(message = "A senha e obrigatoria")
-    @Size(min = 6, max = 255, message = "A senha deve ter entre 6 e 255 caracteres")
+    @Size(min = 6, max = 72, message = "A senha deve ter entre 6 e 72 caracteres")
     private String senha;
 }

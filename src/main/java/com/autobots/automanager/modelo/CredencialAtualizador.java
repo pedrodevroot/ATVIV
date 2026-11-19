@@ -19,9 +19,6 @@ public class CredencialAtualizador {
 			if (!verificador.verificar(atualizacao.getNomeUsuario())) {
 				usuarioSenha.setNomeUsuario(atualizacao.getNomeUsuario());
 			}
-			if (!verificador.verificar(atualizacao.getSenha())) {
-				usuarioSenha.setSenha(atualizacao.getSenha());
-			}
 		}
 		if (credencial instanceof CredencialCodigoBarra codigoBarra && atualizacao.getCodigo() != null) {
 			codigoBarra.setCodigo(atualizacao.getCodigo());

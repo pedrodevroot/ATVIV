@@ -7,6 +7,7 @@ import java.util.Date;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +37,8 @@ public class CargaInicial implements ApplicationRunner {
     private UsuarioRepositorio usuarioRepositorio;
     @Autowired
     private EmpresaRepositorio empresaRepositorio;
+    @Autowired
+    private PasswordEncoder codificador;
 
     @Override
     @Transactional
@@ -45,14 +48,14 @@ public class CargaInicial implements ApplicationRunner {
         }
         Date agora = Calendar.getInstance().getTime();
 
-        Usuario funcionario = usuario("Pedro Alcantara de Braganca e Bourbon", "Dom Pedro",
-                PerfilUsuario.FUNCIONARIO, agora);
-        funcionario.setEndereco(endereco("Sao Paulo", "Sao Paulo", "Jardins",
+        Usuario vendedor = usuario("Pedro Alcantara de Braganca e Bourbon", "Dom Pedro",
+                PerfilUsuario.VENDEDOR, agora);
+        vendedor.setEndereco(endereco("Sao Paulo", "Sao Paulo", "Jardins",
                 "Avenida Sao Gabriel", "00", "01435001"));
-        funcionario.getTelefones().add(telefone("11", "985463372"));
-        funcionario.getDocumentos().add(documento(TipoDocumento.CPF, "85647381922", data(2010, Calendar.MARCH, 10)));
-        funcionario.getEmails().add(email("a@a.com"));
-        funcionario.getCredenciais().add(credencial("dompedrofuncionario", agora));
+        vendedor.getTelefones().add(telefone("11", "985463372"));
+        vendedor.getDocumentos().add(documento(TipoDocumento.CPF, "85647381922", data(2010, Calendar.MARCH, 10)));
+        vendedor.getEmails().add(email("a@a.com"));
+        vendedor.getCredenciais().add(credencial("dompedrovendedor", agora));
 
         Usuario fornecedor = usuario("Componentes varejo de partes automotivas ltda",
                 "Loja do carro, vendas de componentes automotivos", PerfilUsuario.FORNECEDOR, agora);
@@ -60,7 +63,6 @@ public class CargaInicial implements ApplicationRunner {
                 "Avenida Republica do Chile", "00", "20031170"));
         fornecedor.getDocumentos().add(documento(TipoDocumento.CNPJ, "00014556000100", data(2005, Calendar.JUNE, 1)));
         fornecedor.getEmails().add(email("f@f.com"));
-        fornecedor.getCredenciais().add(credencial("dompedrofornecedor", agora));
 
         Usuario cliente = usuario("Pedro Alcantara de Braganca e Bourbon", "Dom pedro cliente",
                 PerfilUsuario.CLIENTE, agora);
@@ -70,6 +72,14 @@ public class CargaInicial implements ApplicationRunner {
         cliente.getEmails().add(email("c@c.com"));
         cliente.getCredenciais().add(credencial("dompedrocliente", agora));
 
+        Usuario administrador = usuario("Pedro Alcantara de Braganca e Bourbon", "Dom Pedro administrador",
+                PerfilUsuario.ADMINISTRADOR, agora);
+        administrador.getCredenciais().add(credencial("dompedroadmin", agora));
+
+        Usuario gerente = usuario("Pedro Alcantara de Braganca e Bourbon", "Dom Pedro gerente",
+                PerfilUsuario.GERENTE, agora);
+        gerente.getCredenciais().add(credencial("dompedrogerente", agora));
+
         Veiculo veiculo = new Veiculo();
         veiculo.setTipo(TipoVeiculo.SUV);
         veiculo.setModelo("Corolla Cross");
@@ -77,9 +87,11 @@ public class CargaInicial implements ApplicationRunner {
         veiculo.setProprietario(cliente);
         cliente.getVeiculos().add(veiculo);
 
-        usuarioRepositorio.save(funcionario);
+        usuarioRepositorio.save(vendedor);
         usuarioRepositorio.save(fornecedor);
         usuarioRepositorio.save(cliente);
+        usuarioRepositorio.save(administrador);
+        usuarioRepositorio.save(gerente);
 
         Empresa empresa = new Empresa();
         empresa.setRazaoSocial("Car service toyota ltda");
@@ -104,15 +116,17 @@ public class CargaInicial implements ApplicationRunner {
         empresa.getServicos().add(alinhamento);
         empresa.getServicos().add(balanceamento);
 
-        empresa.getVendas().add(venda("1234698745", agora, cliente, funcionario, veiculo, roda, 4,
+        empresa.getVendas().add(venda("1234698745", agora, cliente, vendedor, veiculo, roda, 4,
                 trocaRodas, alinhamento));
-        empresa.getVendas().add(venda("1234698749", agora, cliente, funcionario, veiculo, roda, 4,
+        empresa.getVendas().add(venda("1234698749", agora, cliente, vendedor, veiculo, roda, 4,
                 balanceamento, alinhamento));
         empresaRepositorio.save(empresa);
 
-        funcionario.setEmpresa(empresa);
+        vendedor.setEmpresa(empresa);
         fornecedor.setEmpresa(empresa);
         cliente.setEmpresa(empresa);
+        administrador.setEmpresa(empresa);
+        gerente.setEmpresa(empresa);
         fornecedor.getMercadorias().add(roda);
     }
 
@@ -161,7 +175,7 @@ public class CargaInicial implements ApplicationRunner {
     private CredencialUsuarioSenha credencial(String nomeUsuario, Date agora) {
         CredencialUsuarioSenha credencial = new CredencialUsuarioSenha();
         credencial.setNomeUsuario(nomeUsuario);
-        credencial.setSenha("123456");
+        credencial.setSenha(codificador.encode("123456"));
         credencial.setCriacao(agora);
         return credencial;
     }

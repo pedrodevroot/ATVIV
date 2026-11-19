@@ -1,5 +1,9 @@
 package com.autobots.automanager.enumeracoes;
 
 public enum PerfilUsuario {
-	CLIENTE, FUNCIONARIO, FORNECEDOR
+	ADMINISTRADOR, GERENTE, VENDEDOR, CLIENTE, FORNECEDOR;
+
+	public boolean ehFuncionario() {
+		return this == ADMINISTRADOR || this == GERENTE || this == VENDEDOR;
+	}
 }

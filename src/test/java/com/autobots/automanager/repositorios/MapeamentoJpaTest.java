@@ -319,7 +319,7 @@ class MapeamentoJpaTest {
     void mesmoItemEmDuasVendas() {
         Usuario cliente = usuarioSimples("Cliente", PerfilUsuario.CLIENTE);
         Veiculo carro = veiculo(cliente, "ABC1D23");
-        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.FUNCIONARIO);
+        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.VENDEDOR);
         repositorio.save(cliente);
         repositorio.save(funcionario);
 
@@ -343,7 +343,7 @@ class MapeamentoJpaTest {
     void excluirEmpresaMantemUsuarios() {
         Usuario cliente = usuarioSimples("Cliente", PerfilUsuario.CLIENTE);
         Veiculo carro = veiculo(cliente, "ABC1D23");
-        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.FUNCIONARIO);
+        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.VENDEDOR);
         repositorio.save(cliente);
         repositorio.save(funcionario);
         Empresa empresa = empresaRepositorio.saveAndFlush(empresaCom(cliente, funcionario, carro, "V1"));
@@ -559,7 +559,7 @@ class MapeamentoJpaTest {
     void mercadoriaEmVenda() {
         Usuario cliente = usuarioSimples("Cliente", PerfilUsuario.CLIENTE);
         Veiculo carro = veiculo(cliente, "ABC1D23");
-        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.FUNCIONARIO);
+        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.VENDEDOR);
         repositorio.save(cliente);
         repositorio.save(funcionario);
         Empresa empresa = empresaRepositorio.saveAndFlush(empresaCom(cliente, funcionario, carro, "V1"));
@@ -574,7 +574,7 @@ class MapeamentoJpaTest {
     void excluirVendaApagaItens() {
         Usuario cliente = usuarioSimples("Cliente", PerfilUsuario.CLIENTE);
         Veiculo carro = veiculo(cliente, "ABC1D23");
-        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.FUNCIONARIO);
+        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.VENDEDOR);
         repositorio.save(cliente);
         repositorio.save(funcionario);
         Empresa empresa = empresaRepositorio.saveAndFlush(empresaCom(cliente, funcionario, carro, "V1"));
@@ -627,7 +627,7 @@ class MapeamentoJpaTest {
     void consultasDaVenda() {
         Usuario cliente = usuarioSimples("Cliente", PerfilUsuario.CLIENTE);
         Veiculo carro = veiculo(cliente, "ABC1D23");
-        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.FUNCIONARIO);
+        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.VENDEDOR);
         Usuario outro = usuarioSimples("Outro", PerfilUsuario.CLIENTE);
         repositorio.save(cliente);
         repositorio.save(funcionario);
@@ -647,7 +647,7 @@ class MapeamentoJpaTest {
     void listasDoDiagrama() {
         Usuario cliente = usuarioSimples("Cliente", PerfilUsuario.CLIENTE);
         Veiculo carro = veiculo(cliente, "ABC1D23");
-        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.FUNCIONARIO);
+        Usuario funcionario = usuarioSimples("Funcionario", PerfilUsuario.VENDEDOR);
         repositorio.save(cliente);
         repositorio.save(funcionario);
         Empresa empresa = empresaRepositorio.saveAndFlush(empresaCom(cliente, funcionario, carro, "V1"));

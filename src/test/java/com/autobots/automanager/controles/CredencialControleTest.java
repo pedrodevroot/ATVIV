@@ -10,6 +10,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -20,6 +21,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.Calendar;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,19 +33,29 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import com.autobots.automanager.adaptadores.UserDetailsImpl;
+import com.autobots.automanager.configuracao.SegurancaTesteConfiguracao;
 import com.autobots.automanager.conversores.CredencialConversor;
 import com.autobots.automanager.dtos.CredencialAtualizacaoDto;
 import com.autobots.automanager.entidades.Credencial;
 import com.autobots.automanager.entidades.CredencialCodigoBarra;
 import com.autobots.automanager.entidades.CredencialUsuarioSenha;
+import com.autobots.automanager.entidades.Usuario;
+import com.autobots.automanager.enumeracoes.PerfilUsuario;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
+import com.autobots.automanager.excecoes.RespostaSeguranca;
 import com.autobots.automanager.modelo.AdicionadorLinkCredencial;
+import com.autobots.automanager.repositorios.UsuarioRepositorio;
 import com.autobots.automanager.servicos.CredencialServico;
 
 @WebMvcTest(CredencialControle.class)
-@Import({ CredencialConversor.class, AdicionadorLinkCredencial.class })
+@Import({ CredencialConversor.class, AdicionadorLinkCredencial.class, SegurancaTesteConfiguracao.class })
+@WithMockUser(roles = "ADMINISTRADOR")
 class CredencialControleTest {
 
     @Autowired
@@ -50,6 +63,9 @@ class CredencialControleTest {
 
     @MockBean
     private CredencialServico servico;
+
+    @Autowired
+    private UsuarioRepositorio usuarioRepositorio;
 
     private CredencialUsuarioSenha usuarioSenha(Long id, String nomeUsuario) {
         CredencialUsuarioSenha credencial = new CredencialUsuarioSenha();
@@ -172,6 +188,30 @@ class CredencialControleTest {
     }
 
     @Test
+    @DisplayName("POST /usuario/{id}/credenciais: 400 quando a senha tem 73 caracteres")
+    void criarSenhaLonga() throws Exception {
+        String corpo = "{ \"tipo\": \"USUARIO_SENHA\", \"nomeUsuario\": \"maria\", \"senha\": \"" + "a".repeat(73) + "\" }";
+
+        requisicao.perform(post("/usuario/1/credenciais")
+                .contentType(MediaType.APPLICATION_JSON).content(corpo))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.erros[*].campo", hasItem("senha")));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("POST /usuario/{id}/credenciais: 201 quando a senha tem 72 caracteres")
+    void criarSenhaNoLimite() throws Exception {
+        when(servico.criar(anyLong(), any(Credencial.class))).thenReturn(usuarioSenha(5L, "maria"));
+        String corpo = "{ \"tipo\": \"USUARIO_SENHA\", \"nomeUsuario\": \"maria\", \"senha\": \"" + "a".repeat(72) + "\" }";
+
+        requisicao.perform(post("/usuario/1/credenciais")
+                .contentType(MediaType.APPLICATION_JSON).content(corpo))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
     @DisplayName("POST /usuario/{id}/credenciais: 400 quando a senha tem menos de 6 caracteres")
     void criarSenhaCurta() throws Exception {
         String corpo = """
@@ -250,6 +290,38 @@ class CredencialControleTest {
     }
 
     @Test
+    @DisplayName("PUT /credencial/{id}: 400 quando a nova senha so tem espacos")
+    void atualizarSenhaEmBranco() throws Exception {
+        requisicao.perform(put("/credencial/1")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"senha\": \"      \" }"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.erros[*].campo", hasItem("senha")));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("PUT /credencial/{id}: 400 quando a nova senha tem 73 caracteres")
+    void atualizarSenhaLonga() throws Exception {
+        requisicao.perform(put("/credencial/1")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"senha\": \"" + "a".repeat(73) + "\" }"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.erros[*].campo", hasItem("senha")));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("PUT /credencial/{id}: 200 quando a nova senha tem 72 caracteres")
+    void atualizarSenhaNoLimite() throws Exception {
+        when(servico.atualizar(anyLong(), any(CredencialAtualizacaoDto.class))).thenReturn(usuarioSenha(1L, "maria"));
+
+        requisicao.perform(put("/credencial/1")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"senha\": \"" + "a".repeat(72) + "\" }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     @DisplayName("GET /credencial/{id}: 404 quando nao existe")
     void obterPorIdInexistente() throws Exception {
         when(servico.obterPorId(999L)).thenThrow(new RecursoNaoEncontradoException("Credencial", 999L));
@@ -275,5 +347,241 @@ class CredencialControleTest {
 
         requisicao.perform(delete("/credencial/999"))
                 .andExpect(status().isNotFound());
+    }
+
+    private Usuario usuarioComPerfil(Long id, PerfilUsuario perfil) {
+        Usuario usuario = new Usuario();
+        usuario.setId(id);
+        usuario.getPerfis().add(perfil);
+        return usuario;
+    }
+
+    private RequestPostProcessor logado(Long id, PerfilUsuario perfil) {
+        return user(new UserDetailsImpl(id, id, "usuario" + id, "hash", Set.of(perfil), true));
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /credencial/{id}: 401 sem autenticacao")
+    void autorizacaoObterSemAutenticacao() throws Exception {
+        requisicao.perform(get("/credencial/2"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.NAO_AUTENTICADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /credencial/{id}: CLIENTE le o do proprio cadastro e recebe 200")
+    void autorizacaoClienteLeProprio() throws Exception {
+        when(usuarioRepositorio.findByCredenciaisId(2L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.obterPorId(2L)).thenReturn(usuarioSenha(2L, "maria"));
+
+        requisicao.perform(get("/credencial/2").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /credencial/{id}: CLIENTE le o do cadastro de outro usuario e recebe 403")
+    void autorizacaoClienteLeDeOutro() throws Exception {
+        when(usuarioRepositorio.findByCredenciaisId(2L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+
+        requisicao.perform(get("/credencial/2").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}/credenciais: CLIENTE lista os do proprio cadastro e recebe 200")
+    void autorizacaoClienteListaDoProprio() throws Exception {
+        when(usuarioRepositorio.findById(3L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.listarPorUsuario(3L)).thenReturn(List.of(usuarioSenha(2L, "maria")));
+
+        requisicao.perform(get("/usuario/3/credenciais").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("PUT /credencial/{id}: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteAltera() throws Exception {
+        requisicao.perform(put("/credencial/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"inativo\": true }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("POST /usuario/{id}/credenciais: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteCadastra() throws Exception {
+        requisicao.perform(post("/usuario/3/credenciais")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"tipo\": \"USUARIO_SENHA\", \"nomeUsuario\": \"maria\", \"senha\": \"segredo1\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /credencial/{id}: VENDEDOR altera o de um gerente e recebe 403")
+    void autorizacaoVendedorAlteraDeGerente() throws Exception {
+        when(usuarioRepositorio.findByCredenciaisId(2L)).thenReturn(Optional.of(usuarioComPerfil(2L, PerfilUsuario.GERENTE)));
+
+        requisicao.perform(put("/credencial/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"inativo\": true }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /credencial/{id}: VENDEDOR altera o de um cliente e recebe 403")
+    void autorizacaoVendedorAlteraDeCliente() throws Exception {
+        requisicao.perform(put("/credencial/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"senha\": \"trocada1\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("POST /usuario/{id}/credenciais: VENDEDOR cria para um cliente e recebe 403")
+    void autorizacaoVendedorCriaParaCliente() throws Exception {
+        requisicao.perform(post("/usuario/3/credenciais")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"tipo\": \"USUARIO_SENHA\", \"nomeUsuario\": \"maria\", \"senha\": \"segredo1\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("DELETE /credencial/{id}: VENDEDOR exclui o de um cliente e recebe 403")
+    void autorizacaoVendedorExcluiDeCliente() throws Exception {
+        requisicao.perform(delete("/credencial/2"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("GET /credencial/{id}: VENDEDOR continua lendo o de um cliente e recebe 200")
+    void autorizacaoVendedorLeDeCliente() throws Exception {
+        when(usuarioRepositorio.findByCredenciaisId(2L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+        when(servico.obterPorId(2L)).thenReturn(usuarioSenha(2L, "maria"));
+
+        requisicao.perform(get("/credencial/2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.senha").doesNotExist());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("POST /usuario/{id}/credenciais: GERENTE cria para um cliente e recebe 201")
+    void autorizacaoGerenteCriaParaCliente() throws Exception {
+        when(usuarioRepositorio.findById(3L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.criar(anyLong(), any(Credencial.class))).thenReturn(usuarioSenha(5L, "maria"));
+
+        requisicao.perform(post("/usuario/3/credenciais")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"tipo\": \"USUARIO_SENHA\", \"nomeUsuario\": \"maria\", \"senha\": \"segredo1\" }"))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /credencial/{id}: GERENTE exclui o de um cliente e recebe 204")
+    void autorizacaoGerenteExcluiDeCliente() throws Exception {
+        when(usuarioRepositorio.findByCredenciaisId(2L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+
+        requisicao.perform(delete("/credencial/2"))
+                .andExpect(status().isNoContent());
+
+        verify(servico).excluir(2L);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /credencial/{id}: GERENTE altera o de um administrador e recebe 403")
+    void autorizacaoGerenteAlteraDeAdministrador() throws Exception {
+        when(usuarioRepositorio.findByCredenciaisId(2L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR)));
+
+        requisicao.perform(put("/credencial/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"senha\": \"trocada1\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("POST /usuario/{id}/credenciais: GERENTE cria para um administrador e recebe 403")
+    void autorizacaoGerenteCriaParaAdministrador() throws Exception {
+        when(usuarioRepositorio.findById(1L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR)));
+
+        requisicao.perform(post("/usuario/1/credenciais")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"tipo\": \"USUARIO_SENHA\", \"nomeUsuario\": \"maria\", \"senha\": \"segredo1\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /credencial/{id}: GERENTE altera a de um fornecedor e recebe 403")
+    void autorizacaoGerenteAlteraDeFornecedor() throws Exception {
+        when(usuarioRepositorio.findByCredenciaisId(2L)).thenReturn(Optional.of(usuarioComPerfil(2L, PerfilUsuario.FORNECEDOR)));
+
+        requisicao.perform(put("/credencial/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"inativo\": true }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /credencial/{id}: GERENTE altera o de um vendedor e recebe 200")
+    void autorizacaoGerenteAlteraDeVendedor() throws Exception {
+        when(usuarioRepositorio.findByCredenciaisId(2L)).thenReturn(Optional.of(usuarioComPerfil(5L, PerfilUsuario.VENDEDOR)));
+        when(servico.atualizar(anyLong(), any(CredencialAtualizacaoDto.class))).thenReturn(usuarioSenha(2L, "maria"));
+
+        requisicao.perform(put("/credencial/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"inativo\": true }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /credencial/{id}: GERENTE exclui o de um administrador e recebe 403")
+    void autorizacaoGerenteExcluiDeAdministrador() throws Exception {
+        when(usuarioRepositorio.findByCredenciaisId(2L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR)));
+
+        requisicao.perform(delete("/credencial/2"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
     }
 }

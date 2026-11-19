@@ -167,7 +167,11 @@ public class VendaServico {
     }
 
     private Usuario obterFuncionario(long usuarioId, Empresa empresa) {
-        Usuario funcionario = obterComPerfil(usuarioId, PerfilUsuario.FUNCIONARIO);
+        Usuario funcionario = obterUsuario(usuarioId);
+        if (funcionario.getPerfis().stream().noneMatch(PerfilUsuario::ehFuncionario)) {
+            throw new IllegalArgumentException("O usuario de id " + usuarioId
+                    + " nao possui perfil de funcionario: ADMINISTRADOR, GERENTE ou VENDEDOR");
+        }
         if (funcionario.getEmpresa() == null || !funcionario.getEmpresa().getId().equals(empresa.getId())) {
             throw new IllegalArgumentException("O funcionario de id " + usuarioId
                     + " nao esta vinculado a empresa de id " + empresa.getId());

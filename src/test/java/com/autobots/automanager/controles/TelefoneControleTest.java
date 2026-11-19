@@ -7,6 +7,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -16,6 +17,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,16 +27,28 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import com.autobots.automanager.adaptadores.UserDetailsImpl;
+import com.autobots.automanager.configuracao.SegurancaTesteConfiguracao;
 import com.autobots.automanager.conversores.TelefoneConversor;
+import com.autobots.automanager.entidades.Empresa;
 import com.autobots.automanager.entidades.Telefone;
+import com.autobots.automanager.entidades.Usuario;
+import com.autobots.automanager.enumeracoes.PerfilUsuario;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
+import com.autobots.automanager.excecoes.RespostaSeguranca;
 import com.autobots.automanager.modelo.AdicionadorLinkTelefone;
+import com.autobots.automanager.repositorios.EmpresaRepositorio;
+import com.autobots.automanager.repositorios.UsuarioRepositorio;
 import com.autobots.automanager.servicos.TelefoneServico;
 
 @WebMvcTest(TelefoneControle.class)
-@Import({ TelefoneConversor.class, AdicionadorLinkTelefone.class })
+@Import({ TelefoneConversor.class, AdicionadorLinkTelefone.class, SegurancaTesteConfiguracao.class })
+@WithMockUser(roles = "ADMINISTRADOR")
 class TelefoneControleTest {
 
     @Autowired
@@ -41,6 +56,11 @@ class TelefoneControleTest {
 
     @MockBean
     private TelefoneServico servico;
+
+    @Autowired
+    private UsuarioRepositorio usuarioRepositorio;
+    @Autowired
+    private EmpresaRepositorio empresaRepositorio;
 
     private Telefone telefone(Long id, String ddd, String numero) {
         Telefone telefone = new Telefone();
@@ -343,5 +363,197 @@ class TelefoneControleTest {
                 .andExpect(jsonPath("$.erros[*].campo", hasItem("ddd")));
 
         verifyNoInteractions(servico);
+    }
+
+    private Usuario usuarioComPerfil(Long id, PerfilUsuario perfil) {
+        Usuario usuario = new Usuario();
+        usuario.setId(id);
+        usuario.getPerfis().add(perfil);
+        return usuario;
+    }
+
+    private RequestPostProcessor logado(Long id, PerfilUsuario perfil) {
+        return user(new UserDetailsImpl(id, id, "usuario" + id, "hash", Set.of(perfil), true));
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /telefone/{id}: 401 sem autenticacao")
+    void autorizacaoObterSemAutenticacao() throws Exception {
+        requisicao.perform(get("/telefone/2"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.NAO_AUTENTICADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /telefone/{id}: CLIENTE le o do proprio cadastro e recebe 200")
+    void autorizacaoClienteLeProprio() throws Exception {
+        when(usuarioRepositorio.findByTelefonesId(2L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.obterPorId(2L)).thenReturn(telefone(2L, "21", "981234576"));
+
+        requisicao.perform(get("/telefone/2").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /telefone/{id}: CLIENTE le o do cadastro de outro usuario e recebe 403")
+    void autorizacaoClienteLeDeOutro() throws Exception {
+        when(usuarioRepositorio.findByTelefonesId(2L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+
+        requisicao.perform(get("/telefone/2").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}/telefones: CLIENTE lista os do proprio cadastro e recebe 200")
+    void autorizacaoClienteListaDoProprio() throws Exception {
+        when(usuarioRepositorio.findById(3L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.listarPorUsuario(3L)).thenReturn(List.of(telefone(2L, "21", "981234576")));
+
+        requisicao.perform(get("/usuario/3/telefones").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("PUT /telefone/{id}: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteAltera() throws Exception {
+        requisicao.perform(put("/telefone/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"ddd\": \"99\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("POST /usuario/{id}/telefones: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteCadastra() throws Exception {
+        requisicao.perform(post("/usuario/3/telefones")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"ddd\": \"13\", \"numero\": \"981234567\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /telefone/{id}: VENDEDOR altera o de um gerente e recebe 403")
+    void autorizacaoVendedorAlteraDeGerente() throws Exception {
+        when(usuarioRepositorio.findByTelefonesId(2L)).thenReturn(Optional.of(usuarioComPerfil(2L, PerfilUsuario.GERENTE)));
+
+        requisicao.perform(put("/telefone/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"ddd\": \"99\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /telefone/{id}: VENDEDOR altera o de um cliente e recebe 200")
+    void autorizacaoVendedorAlteraDeCliente() throws Exception {
+        when(usuarioRepositorio.findByTelefonesId(2L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+        when(servico.atualizar(anyLong(), any(Telefone.class))).thenReturn(telefone(2L, "21", "981234576"));
+
+        requisicao.perform(put("/telefone/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"ddd\": \"99\" }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /telefone/{id}: GERENTE altera o de um vendedor e recebe 200")
+    void autorizacaoGerenteAlteraDeVendedor() throws Exception {
+        when(usuarioRepositorio.findByTelefonesId(2L)).thenReturn(Optional.of(usuarioComPerfil(5L, PerfilUsuario.VENDEDOR)));
+        when(servico.atualizar(anyLong(), any(Telefone.class))).thenReturn(telefone(2L, "21", "981234576"));
+
+        requisicao.perform(put("/telefone/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"ddd\": \"99\" }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /telefone/{id}: GERENTE exclui o de um administrador e recebe 403")
+    void autorizacaoGerenteExcluiDeAdministrador() throws Exception {
+        when(usuarioRepositorio.findByTelefonesId(2L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR)));
+
+        requisicao.perform(delete("/telefone/2"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("GET /empresa/{id}/telefones: GERENTE recebe 403 sem chamar o servico")
+    void autorizacaoGerenteListaTelefonesDaEmpresa() throws Exception {
+        requisicao.perform(get("/empresa/1/telefones"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("POST /empresa/{id}/telefones: GERENTE recebe 403 sem chamar o servico")
+    void autorizacaoGerenteCadastraTelefoneDaEmpresa() throws Exception {
+        requisicao.perform(post("/empresa/1/telefones")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"ddd\": \"13\", \"numero\": \"981234567\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMINISTRADOR")
+    @DisplayName("GET /empresa/{id}/telefones: ADMINISTRADOR recebe 200")
+    void autorizacaoAdministradorListaTelefonesDaEmpresa() throws Exception {
+        when(servico.listarPorEmpresa(1L)).thenReturn(List.of(telefone(1L, "21", "981234576")));
+
+        requisicao.perform(get("/empresa/1/telefones"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /telefone/{id}: GERENTE altera telefone que pertence a empresa e recebe 403")
+    void autorizacaoGerenteAlteraTelefoneDaEmpresa() throws Exception {
+        when(empresaRepositorio.findByTelefonesId(2L)).thenReturn(Optional.of(new Empresa()));
+
+        requisicao.perform(put("/telefone/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"ddd\": \"99\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMINISTRADOR")
+    @DisplayName("PUT /telefone/{id}: ADMINISTRADOR altera telefone de empresa e recebe 200")
+    void autorizacaoAdministradorAlteraTelefoneDaEmpresa() throws Exception {
+        when(servico.atualizar(anyLong(), any(Telefone.class))).thenReturn(telefone(2L, "99", "981234576"));
+
+        requisicao.perform(put("/telefone/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"ddd\": \"99\" }"))
+                .andExpect(status().isOk());
     }
 }

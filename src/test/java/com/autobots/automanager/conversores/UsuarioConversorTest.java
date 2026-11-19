@@ -239,7 +239,7 @@ class UsuarioConversorTest {
         usuario.setNomeSocial("Dom Pedro");
         usuario.setDataNascimento(data(2002, Calendar.MAY, 15));
         usuario.setDataCadastro(data(2020, Calendar.JANUARY, 1));
-        usuario.getPerfis().add(PerfilUsuario.FUNCIONARIO);
+        usuario.getPerfis().add(PerfilUsuario.VENDEDOR);
 
         UsuarioRespostaDto dto = conversor.paraResposta(usuario);
 
@@ -248,7 +248,7 @@ class UsuarioConversorTest {
         assertEquals("Dom Pedro", dto.getNomeSocial());
         assertEquals(data(2002, Calendar.MAY, 15), dto.getDataNascimento());
         assertEquals(data(2020, Calendar.JANUARY, 1), dto.getDataCadastro());
-        assertEquals(Set.of(PerfilUsuario.FUNCIONARIO), dto.getPerfis());
+        assertEquals(Set.of(PerfilUsuario.VENDEDOR), dto.getPerfis());
     }
 
     @Test

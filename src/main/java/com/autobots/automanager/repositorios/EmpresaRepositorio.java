@@ -10,4 +10,6 @@ public interface EmpresaRepositorio extends JpaRepository<Empresa, Long> {
     Optional<Empresa> findByEnderecoId(Long enderecoId);
 
     Optional<Empresa> findByVendasId(Long vendaId);
+
+    Optional<Empresa> findByTelefonesId(Long telefoneId);
 }

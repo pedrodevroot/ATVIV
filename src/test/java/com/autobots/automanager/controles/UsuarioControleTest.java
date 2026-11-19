@@ -1,5 +1,6 @@
 package com.autobots.automanager.controles;
 
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasItem;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -19,6 +21,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.Calendar;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,8 +32,13 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import com.autobots.automanager.adaptadores.UserDetailsImpl;
+import com.autobots.automanager.configuracao.SegurancaTesteConfiguracao;
 import com.autobots.automanager.conversores.UsuarioConversor;
 import com.autobots.automanager.entidades.CredencialUsuarioSenha;
 import com.autobots.automanager.entidades.Empresa;
@@ -39,11 +48,14 @@ import com.autobots.automanager.entidades.Usuario;
 import com.autobots.automanager.enumeracoes.PerfilUsuario;
 import com.autobots.automanager.excecoes.ConflitoException;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
+import com.autobots.automanager.excecoes.RespostaSeguranca;
 import com.autobots.automanager.modelo.AdicionadorLinkUsuario;
+import com.autobots.automanager.repositorios.UsuarioRepositorio;
 import com.autobots.automanager.servicos.UsuarioServico;
 
 @WebMvcTest(UsuarioControle.class)
-@Import({ UsuarioConversor.class, AdicionadorLinkUsuario.class })
+@Import({ UsuarioConversor.class, AdicionadorLinkUsuario.class, SegurancaTesteConfiguracao.class })
+@WithMockUser(roles = "ADMINISTRADOR")
 class UsuarioControleTest {
 
     @Autowired
@@ -51,6 +63,9 @@ class UsuarioControleTest {
 
     @MockBean
     private UsuarioServico servico;
+
+    @Autowired
+    private UsuarioRepositorio usuarioRepositorio;
 
     private Usuario usuario(Long id, String nome) {
         Usuario usuario = new Usuario();
@@ -88,13 +103,13 @@ class UsuarioControleTest {
     void obterPorIdPerfisOrdenados() throws Exception {
         Usuario usuario = usuario(1L, "Varios Perfis");
         usuario.getPerfis().add(PerfilUsuario.FORNECEDOR);
-        usuario.getPerfis().add(PerfilUsuario.FUNCIONARIO);
+        usuario.getPerfis().add(PerfilUsuario.VENDEDOR);
         when(servico.obterPorId(1L)).thenReturn(usuario);
 
         requisicao.perform(get("/usuario/1"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.perfis[0]").value("CLIENTE"))
-                .andExpect(jsonPath("$.perfis[1]").value("FUNCIONARIO"))
+                .andExpect(jsonPath("$.perfis[0]").value("VENDEDOR"))
+                .andExpect(jsonPath("$.perfis[1]").value("CLIENTE"))
                 .andExpect(jsonPath("$.perfis[2]").value("FORNECEDOR"));
     }
 
@@ -201,14 +216,14 @@ class UsuarioControleTest {
     @DisplayName("POST /usuario/cadastro: 400 com os valores aceitos quando o perfil nao existe")
     void cadastrarPerfilInexistente() throws Exception {
         String corpo = """
-                { "nome": "Perfil Errado", "perfis": [ "GERENTE" ] }
+                { "nome": "Perfil Errado", "perfis": [ "FUNCIONARIO" ] }
                 """;
 
         requisicao.perform(post("/usuario/cadastro")
                 .contentType(MediaType.APPLICATION_JSON).content(corpo))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.mensagem").value(
-                        "O valor GERENTE nao e aceito. Valores aceitos: [CLIENTE, FUNCIONARIO, FORNECEDOR]."));
+                        "O valor FUNCIONARIO nao e aceito. Valores aceitos: [ADMINISTRADOR, GERENTE, VENDEDOR, CLIENTE, FORNECEDOR]."));
 
         verifyNoInteractions(servico);
     }
@@ -644,5 +659,312 @@ class UsuarioControleTest {
         }
 
         verifyNoInteractions(servico);
+    }
+
+    private Usuario usuarioComPerfil(Long id, PerfilUsuario perfil) {
+        Usuario usuario = new Usuario();
+        usuario.setId(id);
+        usuario.getPerfis().add(perfil);
+        return usuario;
+    }
+
+    private RequestPostProcessor logado(Long id, PerfilUsuario perfil) {
+        return user(new UserDetailsImpl(id, id, "usuario" + id, "hash", Set.of(perfil), true));
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /usuario/{id}: 401 sem autenticacao")
+    void autorizacaoObterSemAutenticacao() throws Exception {
+        requisicao.perform(get("/usuario/1"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.NAO_AUTENTICADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /usuario/usuarios: 401 sem autenticacao")
+    void autorizacaoListarSemAutenticacao() throws Exception {
+        requisicao.perform(get("/usuario/usuarios"))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("GET /usuario/usuarios: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteListaUsuarios() throws Exception {
+        requisicao.perform(get("/usuario/usuarios"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}: CLIENTE le o proprio cadastro e recebe 200")
+    void autorizacaoClienteLeProprioCadastro() throws Exception {
+        when(usuarioRepositorio.findById(3L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.obterPorId(3L)).thenReturn(usuario(3L, "Cliente Proprio"));
+
+        requisicao.perform(get("/usuario/3").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(3));
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}: CLIENTE le o cadastro de outro usuario e recebe 403")
+    void autorizacaoClienteLeOutroUsuario() throws Exception {
+        when(usuarioRepositorio.findById(4L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+
+        requisicao.perform(get("/usuario/4").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "FORNECEDOR")
+    @DisplayName("GET /usuario/{id}: FORNECEDOR recebe 403 sem consultar o repositorio")
+    void autorizacaoFornecedorLeUsuario() throws Exception {
+        requisicao.perform(get("/usuario/1"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+        verifyNoInteractions(usuarioRepositorio);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("GET /usuario/{id}: GERENTE le usuario ADMINISTRADOR e recebe 403")
+    void autorizacaoGerenteLeAdministrador() throws Exception {
+        when(usuarioRepositorio.findById(1L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR)));
+
+        requisicao.perform(get("/usuario/1"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("POST /usuario/cadastro: GERENTE cadastra ADMINISTRADOR e recebe 403")
+    void autorizacaoGerenteCadastraAdministrador() throws Exception {
+        requisicao.perform(post("/usuario/cadastro")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"nome\": \"Novo Admin\", \"perfis\": [ \"ADMINISTRADOR\" ] }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("POST /usuario/cadastro: GERENTE cadastra VENDEDOR e recebe 201")
+    void autorizacaoGerenteCadastraVendedor() throws Exception {
+        when(servico.cadastrar(any(Usuario.class))).thenReturn(usuario(7L, "Novo Vendedor"));
+
+        requisicao.perform(post("/usuario/cadastro")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"nome\": \"Novo Vendedor\", \"perfis\": [ \"VENDEDOR\" ] }"))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", "/usuario/7"));
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("POST /usuario/cadastro: VENDEDOR cadastra CLIENTE e recebe 201")
+    void autorizacaoVendedorCadastraCliente() throws Exception {
+        when(servico.cadastrar(any(Usuario.class))).thenReturn(usuario(8L, "Novo Cliente"));
+
+        requisicao.perform(post("/usuario/cadastro")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"nome\": \"Novo Cliente\", \"perfis\": [ \"CLIENTE\" ] }"))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", "/usuario/8"));
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("POST /usuario/cadastro: VENDEDOR cadastra GERENTE e recebe 403")
+    void autorizacaoVendedorCadastraGerente() throws Exception {
+        requisicao.perform(post("/usuario/cadastro")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"nome\": \"Novo Gerente\", \"perfis\": [ \"GERENTE\" ] }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("POST /usuario/cadastro: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteCadastraUsuario() throws Exception {
+        requisicao.perform(post("/usuario/cadastro")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"nome\": \"Outro Cliente\", \"perfis\": [ \"CLIENTE\" ] }"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /usuario/atualizar: VENDEDOR atualiza cliente e recebe 200")
+    void autorizacaoVendedorAtualizaCliente() throws Exception {
+        when(usuarioRepositorio.findById(1L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.CLIENTE)));
+        when(servico.atualizar(any(Usuario.class))).thenReturn(usuario(1L, "Nome Novo"));
+
+        requisicao.perform(put("/usuario/atualizar")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"id\": 1, \"nome\": \"Nome Novo\" }"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nome").value("Nome Novo"));
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /usuario/atualizar: VENDEDOR atualiza gerente e recebe 403")
+    void autorizacaoVendedorAtualizaGerente() throws Exception {
+        when(usuarioRepositorio.findById(2L)).thenReturn(Optional.of(usuarioComPerfil(2L, PerfilUsuario.GERENTE)));
+
+        requisicao.perform(put("/usuario/atualizar")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"id\": 2, \"nome\": \"Nome Novo\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /usuario/atualizar: VENDEDOR muda os perfis de cliente para VENDEDOR e recebe 403")
+    void autorizacaoVendedorPromoveCliente() throws Exception {
+        when(usuarioRepositorio.findById(1L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.CLIENTE)));
+
+        requisicao.perform(put("/usuario/atualizar")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"id\": 1, \"perfis\": [ \"VENDEDOR\" ] }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMINISTRADOR")
+    @DisplayName("PUT /usuario/atualizar: ADMINISTRADOR promove cliente a GERENTE e recebe 200")
+    void autorizacaoAdministradorPromoveCliente() throws Exception {
+        when(servico.atualizar(any(Usuario.class))).thenReturn(usuario(1L, "Promovido"));
+
+        requisicao.perform(put("/usuario/atualizar")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{ \"id\": 1, \"perfis\": [ \"GERENTE\" ] }"))
+                .andExpect(status().isOk());
+
+        verifyNoInteractions(usuarioRepositorio);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /usuario/excluir/{id}: GERENTE exclui ADMINISTRADOR e recebe 403")
+    void autorizacaoGerenteExcluiAdministrador() throws Exception {
+        when(usuarioRepositorio.findById(1L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR)));
+
+        requisicao.perform(delete("/usuario/excluir/1"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /usuario/excluir/{id}: GERENTE exclui VENDEDOR e recebe 204")
+    void autorizacaoGerenteExcluiVendedor() throws Exception {
+        when(usuarioRepositorio.findById(5L)).thenReturn(Optional.of(usuarioComPerfil(5L, PerfilUsuario.VENDEDOR)));
+
+        requisicao.perform(delete("/usuario/excluir/5"))
+                .andExpect(status().isNoContent());
+
+        verify(servico).excluir(5L);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMINISTRADOR")
+    @DisplayName("DELETE /usuario/excluir/{id}: ADMINISTRADOR exclui ADMINISTRADOR e recebe 204")
+    void autorizacaoAdministradorExcluiAdministrador() throws Exception {
+        requisicao.perform(delete("/usuario/excluir/1"))
+                .andExpect(status().isNoContent());
+
+        verify(servico).excluir(1L);
+        verifyNoInteractions(usuarioRepositorio);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("DELETE /usuario/excluir/{id}: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteExcluiUsuario() throws Exception {
+        requisicao.perform(delete("/usuario/excluir/3"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /usuario/usuarios: GERENTE recebe so os usuarios que gerencia, incluindo ele mesmo")
+    void autorizacaoGerenteListaSoOsGerenciaveis() throws Exception {
+        when(servico.listar()).thenReturn(List.of(
+                usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR),
+                usuarioComPerfil(2L, PerfilUsuario.GERENTE),
+                usuarioComPerfil(3L, PerfilUsuario.VENDEDOR),
+                usuarioComPerfil(4L, PerfilUsuario.CLIENTE),
+                usuarioComPerfil(5L, PerfilUsuario.FORNECEDOR)));
+
+        requisicao.perform(get("/usuario/usuarios").with(logado(2L, PerfilUsuario.GERENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[*].id", containsInAnyOrder(2, 3, 4)));
+    }
+
+    @Test
+    @DisplayName("GET /usuario/usuarios: VENDEDOR recebe so os clientes e ele mesmo")
+    void autorizacaoVendedorListaClientesEEleMesmo() throws Exception {
+        when(servico.listar()).thenReturn(List.of(
+                usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR),
+                usuarioComPerfil(2L, PerfilUsuario.GERENTE),
+                usuarioComPerfil(3L, PerfilUsuario.VENDEDOR),
+                usuarioComPerfil(4L, PerfilUsuario.CLIENTE),
+                usuarioComPerfil(5L, PerfilUsuario.VENDEDOR)));
+
+        requisicao.perform(get("/usuario/usuarios").with(logado(3L, PerfilUsuario.VENDEDOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[*].id", containsInAnyOrder(3, 4)));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMINISTRADOR")
+    @DisplayName("GET /usuario/usuarios: ADMINISTRADOR recebe a lista completa")
+    void autorizacaoAdministradorListaTodos() throws Exception {
+        when(servico.listar()).thenReturn(List.of(
+                usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR),
+                usuarioComPerfil(5L, PerfilUsuario.FORNECEDOR)));
+
+        requisicao.perform(get("/usuario/usuarios"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2));
     }
 }

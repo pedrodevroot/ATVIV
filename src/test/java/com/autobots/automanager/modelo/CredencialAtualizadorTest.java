@@ -44,16 +44,30 @@ class CredencialAtualizadorTest {
     }
 
     @Test
-    @DisplayName("troca a senha de usuario e senha sem mexer no nome nem no inativo")
-    void trocaSenha() {
+    @DisplayName("nunca copia a senha em texto puro: a senha so e gravada pelo CredencialServico, codificada")
+    void naoCopiaSenha() {
         CredencialUsuarioSenha credencial = usuarioSenha();
         CredencialAtualizacaoDto atualizacao = new CredencialAtualizacaoDto();
         atualizacao.setSenha("novaSenha");
 
         atualizador.atualizar(credencial, atualizacao);
 
-        assertEquals("novaSenha", credencial.getSenha());
+        assertEquals("segredo1", credencial.getSenha());
         assertEquals("maria", credencial.getNomeUsuario());
+        assertFalse(credencial.isInativo());
+    }
+
+    @Test
+    @DisplayName("troca o nome de usuario sem mexer na senha nem no inativo")
+    void trocaNomeUsuario() {
+        CredencialUsuarioSenha credencial = usuarioSenha();
+        CredencialAtualizacaoDto atualizacao = new CredencialAtualizacaoDto();
+        atualizacao.setNomeUsuario("mariaSilva");
+
+        atualizador.atualizar(credencial, atualizacao);
+
+        assertEquals("mariaSilva", credencial.getNomeUsuario());
+        assertEquals("segredo1", credencial.getSenha());
         assertFalse(credencial.isInativo());
     }
 

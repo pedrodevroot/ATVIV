@@ -7,6 +7,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -16,6 +17,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,16 +27,26 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import com.autobots.automanager.adaptadores.UserDetailsImpl;
+import com.autobots.automanager.configuracao.SegurancaTesteConfiguracao;
 import com.autobots.automanager.conversores.EmailConversor;
 import com.autobots.automanager.entidades.Email;
+import com.autobots.automanager.entidades.Usuario;
+import com.autobots.automanager.enumeracoes.PerfilUsuario;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
+import com.autobots.automanager.excecoes.RespostaSeguranca;
 import com.autobots.automanager.modelo.AdicionadorLinkEmail;
+import com.autobots.automanager.repositorios.UsuarioRepositorio;
 import com.autobots.automanager.servicos.EmailServico;
 
 @WebMvcTest(EmailControle.class)
-@Import({ EmailConversor.class, AdicionadorLinkEmail.class })
+@Import({ EmailConversor.class, AdicionadorLinkEmail.class, SegurancaTesteConfiguracao.class })
+@WithMockUser(roles = "ADMINISTRADOR")
 class EmailControleTest {
 
     @Autowired
@@ -41,6 +54,9 @@ class EmailControleTest {
 
     @MockBean
     private EmailServico servico;
+
+    @Autowired
+    private UsuarioRepositorio usuarioRepositorio;
 
     private Email email(Long id, String endereco) {
         Email email = new Email();
@@ -183,5 +199,137 @@ class EmailControleTest {
 
         requisicao.perform(delete("/email/999"))
                 .andExpect(status().isNotFound());
+    }
+
+    private Usuario usuarioComPerfil(Long id, PerfilUsuario perfil) {
+        Usuario usuario = new Usuario();
+        usuario.setId(id);
+        usuario.getPerfis().add(perfil);
+        return usuario;
+    }
+
+    private RequestPostProcessor logado(Long id, PerfilUsuario perfil) {
+        return user(new UserDetailsImpl(id, id, "usuario" + id, "hash", Set.of(perfil), true));
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /email/{id}: 401 sem autenticacao")
+    void autorizacaoObterSemAutenticacao() throws Exception {
+        requisicao.perform(get("/email/2"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.NAO_AUTENTICADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /email/{id}: CLIENTE le o do proprio cadastro e recebe 200")
+    void autorizacaoClienteLeProprio() throws Exception {
+        when(usuarioRepositorio.findByEmailsId(2L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.obterPorId(2L)).thenReturn(email(2L, "maria@email.com"));
+
+        requisicao.perform(get("/email/2").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /email/{id}: CLIENTE le o do cadastro de outro usuario e recebe 403")
+    void autorizacaoClienteLeDeOutro() throws Exception {
+        when(usuarioRepositorio.findByEmailsId(2L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+
+        requisicao.perform(get("/email/2").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}/emails: CLIENTE lista os do proprio cadastro e recebe 200")
+    void autorizacaoClienteListaDoProprio() throws Exception {
+        when(usuarioRepositorio.findById(3L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.listarPorUsuario(3L)).thenReturn(List.of(email(2L, "maria@email.com")));
+
+        requisicao.perform(get("/usuario/3/emails").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("PUT /email/{id}: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteAltera() throws Exception {
+        requisicao.perform(put("/email/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"endereco\": \"nova@email.com\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("POST /usuario/{id}/emails: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteCadastra() throws Exception {
+        requisicao.perform(post("/usuario/3/emails")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"endereco\": \"maria@email.com\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /email/{id}: VENDEDOR altera o de um gerente e recebe 403")
+    void autorizacaoVendedorAlteraDeGerente() throws Exception {
+        when(usuarioRepositorio.findByEmailsId(2L)).thenReturn(Optional.of(usuarioComPerfil(2L, PerfilUsuario.GERENTE)));
+
+        requisicao.perform(put("/email/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"endereco\": \"nova@email.com\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /email/{id}: VENDEDOR altera o de um cliente e recebe 200")
+    void autorizacaoVendedorAlteraDeCliente() throws Exception {
+        when(usuarioRepositorio.findByEmailsId(2L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+        when(servico.atualizar(anyLong(), any(Email.class))).thenReturn(email(2L, "maria@email.com"));
+
+        requisicao.perform(put("/email/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"endereco\": \"nova@email.com\" }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /email/{id}: GERENTE altera o de um vendedor e recebe 200")
+    void autorizacaoGerenteAlteraDeVendedor() throws Exception {
+        when(usuarioRepositorio.findByEmailsId(2L)).thenReturn(Optional.of(usuarioComPerfil(5L, PerfilUsuario.VENDEDOR)));
+        when(servico.atualizar(anyLong(), any(Email.class))).thenReturn(email(2L, "maria@email.com"));
+
+        requisicao.perform(put("/email/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"endereco\": \"nova@email.com\" }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /email/{id}: GERENTE exclui o de um administrador e recebe 403")
+    void autorizacaoGerenteExcluiDeAdministrador() throws Exception {
+        when(usuarioRepositorio.findByEmailsId(2L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR)));
+
+        requisicao.perform(delete("/email/2"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
     }
 }

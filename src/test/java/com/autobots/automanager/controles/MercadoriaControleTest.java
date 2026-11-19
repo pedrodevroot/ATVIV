@@ -26,18 +26,23 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.autobots.automanager.configuracao.SegurancaTesteConfiguracao;
 import com.autobots.automanager.conversores.MercadoriaConversor;
 import com.autobots.automanager.dtos.MercadoriaAtualizacaoDto;
 import com.autobots.automanager.entidades.Mercadoria;
 import com.autobots.automanager.excecoes.ConflitoException;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
+import com.autobots.automanager.excecoes.RespostaSeguranca;
 import com.autobots.automanager.modelo.AdicionadorLinkMercadoria;
 import com.autobots.automanager.servicos.MercadoriaServico;
 
 @WebMvcTest(MercadoriaControle.class)
-@Import({ MercadoriaConversor.class, AdicionadorLinkMercadoria.class })
+@Import({ MercadoriaConversor.class, AdicionadorLinkMercadoria.class, SegurancaTesteConfiguracao.class })
+@WithMockUser(roles = "ADMINISTRADOR")
 class MercadoriaControleTest {
 
     private static final String CORPO = """
@@ -249,5 +254,207 @@ class MercadoriaControleTest {
                 .content("{ \"nome\": \"Pneu\", \"fabricacao\": \"2025-01-15T00:00:00.000+00:00\", "
                         + "\"quantidade\": 999999999, \"valor\": 1 }"))
                 .andExpect(status().isCreated());
+    }
+
+    private static final String CORPO_ATUALIZACAO = "{ \"quantidade\": 10 }";
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /mercadoria/{id}: 401 sem autenticacao")
+    void autorizacaoObterSemAutenticacao() throws Exception {
+        requisicao.perform(get("/mercadoria/10"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.NAO_AUTENTICADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("POST /empresa/{id}/mercadorias: 401 sem autenticacao")
+    void autorizacaoCadastrarSemAutenticacao() throws Exception {
+        requisicao.perform(post("/empresa/1/mercadorias")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("GET /mercadoria/{id}: VENDEDOR le e recebe 200")
+    void autorizacaoVendedorLeMercadoria() throws Exception {
+        when(servico.obterPorId(10L)).thenReturn(mercadoria(10L));
+
+        requisicao.perform(get("/mercadoria/10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(10));
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("GET /empresa/{id}/mercadorias: VENDEDOR lista e recebe 200")
+    void autorizacaoVendedorListaMercadorias() throws Exception {
+        when(servico.listarPorEmpresa(1L)).thenReturn(List.of(mercadoria(10L)));
+
+        requisicao.perform(get("/empresa/1/mercadorias"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("GET /usuario/{id}/mercadorias: VENDEDOR lista as do fornecedor e recebe 200")
+    void autorizacaoVendedorListaDoFornecedor() throws Exception {
+        when(servico.listarPorFornecedor(2L)).thenReturn(List.of(mercadoria(10L)));
+
+        requisicao.perform(get("/usuario/2/mercadorias"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("POST /empresa/{id}/mercadorias: VENDEDOR recebe 403 sem chamar o servico")
+    void autorizacaoVendedorCadastra() throws Exception {
+        requisicao.perform(post("/empresa/1/mercadorias")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /mercadoria/{id}: VENDEDOR recebe 403 sem chamar o servico")
+    void autorizacaoVendedorAltera() throws Exception {
+        requisicao.perform(put("/mercadoria/10")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO_ATUALIZACAO))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("DELETE /mercadoria/{id}: VENDEDOR recebe 403 sem chamar o servico")
+    void autorizacaoVendedorExclui() throws Exception {
+        requisicao.perform(delete("/mercadoria/10"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /usuario/{id}/mercadorias/{id}: VENDEDOR vincula fornecedor e recebe 403")
+    void autorizacaoVendedorVinculaFornecedor() throws Exception {
+        requisicao.perform(put("/usuario/2/mercadorias/10"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("DELETE /usuario/{id}/mercadorias/{id}: VENDEDOR desvincula fornecedor e recebe 403")
+    void autorizacaoVendedorDesvinculaFornecedor() throws Exception {
+        requisicao.perform(delete("/usuario/2/mercadorias/10"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("POST /empresa/{id}/mercadorias: GERENTE cadastra e recebe 201")
+    void autorizacaoGerenteCadastra() throws Exception {
+        when(servico.criar(anyLong(), any(Mercadoria.class))).thenReturn(mercadoria(10L));
+
+        requisicao.perform(post("/empresa/1/mercadorias")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", "/mercadoria/10"));
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /mercadoria/{id}: GERENTE altera e recebe 200")
+    void autorizacaoGerenteAltera() throws Exception {
+        when(servico.atualizar(anyLong(), any(MercadoriaAtualizacaoDto.class))).thenReturn(mercadoria(10L));
+
+        requisicao.perform(put("/mercadoria/10")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO_ATUALIZACAO))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /mercadoria/{id}: GERENTE exclui e recebe 204")
+    void autorizacaoGerenteExclui() throws Exception {
+        requisicao.perform(delete("/mercadoria/10"))
+                .andExpect(status().isNoContent());
+
+        verify(servico).excluir(10L);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /usuario/{id}/mercadorias/{id}: GERENTE vincula fornecedor e recebe 204")
+    void autorizacaoGerenteVinculaFornecedor() throws Exception {
+        requisicao.perform(put("/usuario/2/mercadorias/10"))
+                .andExpect(status().isNoContent());
+
+        verify(servico).vincularFornecedor(2L, 10L);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /usuario/{id}/mercadorias/{id}: GERENTE desvincula fornecedor e recebe 204")
+    void autorizacaoGerenteDesvinculaFornecedor() throws Exception {
+        requisicao.perform(delete("/usuario/2/mercadorias/10"))
+                .andExpect(status().isNoContent());
+
+        verify(servico).desvincularFornecedor(2L, 10L);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("GET /mercadoria/{id}: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteLeMercadoria() throws Exception {
+        requisicao.perform(get("/mercadoria/10"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("GET /empresa/{id}/mercadorias: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteListaMercadorias() throws Exception {
+        requisicao.perform(get("/empresa/1/mercadorias"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "FORNECEDOR")
+    @DisplayName("GET /usuario/{id}/mercadorias: FORNECEDOR recebe 403 sem chamar o servico")
+    void autorizacaoFornecedorListaDoFornecedor() throws Exception {
+        requisicao.perform(get("/usuario/2/mercadorias"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
     }
 }

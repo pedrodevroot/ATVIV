@@ -98,12 +98,12 @@ class UsuarioAtualizadorTest {
     void substituiPerfis() {
         Usuario usuario = usuarioCompleto();
         Usuario atualizacao = new Usuario();
-        atualizacao.getPerfis().add(PerfilUsuario.FUNCIONARIO);
+        atualizacao.getPerfis().add(PerfilUsuario.VENDEDOR);
         atualizacao.getPerfis().add(PerfilUsuario.FORNECEDOR);
 
         atualizador.atualizar(usuario, atualizacao);
 
-        assertEquals(Set.of(PerfilUsuario.FUNCIONARIO, PerfilUsuario.FORNECEDOR), usuario.getPerfis());
+        assertEquals(Set.of(PerfilUsuario.VENDEDOR, PerfilUsuario.FORNECEDOR), usuario.getPerfis());
     }
 
     @Test

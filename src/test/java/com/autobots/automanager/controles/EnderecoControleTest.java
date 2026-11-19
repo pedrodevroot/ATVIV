@@ -7,6 +7,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -15,6 +16,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,17 +27,29 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import com.autobots.automanager.adaptadores.UserDetailsImpl;
+import com.autobots.automanager.configuracao.SegurancaTesteConfiguracao;
 import com.autobots.automanager.conversores.EnderecoConversor;
+import com.autobots.automanager.entidades.Empresa;
 import com.autobots.automanager.entidades.Endereco;
+import com.autobots.automanager.entidades.Usuario;
+import com.autobots.automanager.enumeracoes.PerfilUsuario;
 import com.autobots.automanager.excecoes.ConflitoException;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
+import com.autobots.automanager.excecoes.RespostaSeguranca;
 import com.autobots.automanager.modelo.AdicionadorLinkEndereco;
+import com.autobots.automanager.repositorios.EmpresaRepositorio;
+import com.autobots.automanager.repositorios.UsuarioRepositorio;
 import com.autobots.automanager.servicos.EnderecoServico;
 
 @WebMvcTest(EnderecoControle.class)
-@Import({ EnderecoConversor.class, AdicionadorLinkEndereco.class })
+@Import({ EnderecoConversor.class, AdicionadorLinkEndereco.class, SegurancaTesteConfiguracao.class })
+@WithMockUser(roles = "ADMINISTRADOR")
 class EnderecoControleTest {
 
     @Autowired
@@ -40,6 +57,22 @@ class EnderecoControleTest {
 
     @MockBean
     private EnderecoServico servico;
+
+    @Autowired
+    private UsuarioRepositorio usuarioRepositorio;
+    @Autowired
+    private EmpresaRepositorio empresaRepositorio;
+
+    private static final String CORPO_ENDERECO = """
+            {
+              "estado": "Sao Paulo",
+              "cidade": "Santos",
+              "bairro": "Gonzaga",
+              "rua": "Avenida Ana Costa",
+              "numero": "250",
+              "codigoPostal": "11060002"
+            }
+            """;
 
     private Endereco endereco(Long id, String cidade) {
         Endereco endereco = new Endereco();
@@ -378,6 +411,170 @@ class EnderecoControleTest {
                 .contentType(MediaType.APPLICATION_JSON).content(corpo))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.erros[*].campo", hasItem("cidade")));
+
+        verifyNoInteractions(servico);
+    }
+
+    private Usuario usuarioComPerfil(Long id, PerfilUsuario perfil) {
+        Usuario usuario = new Usuario();
+        usuario.setId(id);
+        usuario.getPerfis().add(perfil);
+        return usuario;
+    }
+
+    private RequestPostProcessor logado(Long id, PerfilUsuario perfil) {
+        return user(new UserDetailsImpl(id, id, "usuario" + id, "hash", Set.of(perfil), true));
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /endereco/{id}: 401 sem autenticacao")
+    void autorizacaoObterSemAutenticacao() throws Exception {
+        requisicao.perform(get("/endereco/3"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.NAO_AUTENTICADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("GET /empresa/{id}/endereco: GERENTE recebe 403 sem chamar o servico")
+    void autorizacaoGerenteObtemEnderecoDaEmpresa() throws Exception {
+        requisicao.perform(get("/empresa/1/endereco"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("POST /empresa/{id}/endereco: GERENTE recebe 403 sem chamar o servico")
+    void autorizacaoGerenteCadastraEnderecoDaEmpresa() throws Exception {
+        requisicao.perform(post("/empresa/1/endereco")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO_ENDERECO))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMINISTRADOR")
+    @DisplayName("GET /empresa/{id}/endereco: ADMINISTRADOR recebe 200")
+    void autorizacaoAdministradorObtemEnderecoDaEmpresa() throws Exception {
+        when(servico.obterPorEmpresa(1L)).thenReturn(endereco(3L, "Santos"));
+
+        requisicao.perform(get("/empresa/1/endereco"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(3));
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}/endereco: CLIENTE le o proprio endereco e recebe 200")
+    void autorizacaoClienteLeProprioEndereco() throws Exception {
+        when(usuarioRepositorio.findById(3L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.obterPorUsuario(3L)).thenReturn(endereco(3L, "Santos"));
+
+        requisicao.perform(get("/usuario/3/endereco").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cidade").value("Santos"));
+    }
+
+    @Test
+    @DisplayName("GET /endereco/{id}: CLIENTE le o proprio endereco e recebe 200")
+    void autorizacaoClienteLeEnderecoPeloId() throws Exception {
+        when(usuarioRepositorio.findByEnderecoId(3L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.obterPorId(3L)).thenReturn(endereco(3L, "Santos"));
+
+        requisicao.perform(get("/endereco/3").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}/endereco: CLIENTE le o endereco de outro usuario e recebe 403")
+    void autorizacaoClienteLeEnderecoDeOutro() throws Exception {
+        when(usuarioRepositorio.findById(4L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+
+        requisicao.perform(get("/usuario/4/endereco").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("POST /usuario/{id}/endereco: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteCadastraEndereco() throws Exception {
+        requisicao.perform(post("/usuario/3/endereco")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO_ENDERECO))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("PUT /endereco/{id}: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteAlteraEndereco() throws Exception {
+        requisicao.perform(put("/endereco/3")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"cidade\": \"Santos\" }"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /endereco/{id}: VENDEDOR altera o de um gerente e recebe 403")
+    void autorizacaoVendedorAlteraEnderecoDeGerente() throws Exception {
+        when(usuarioRepositorio.findByEnderecoId(3L)).thenReturn(Optional.of(usuarioComPerfil(2L, PerfilUsuario.GERENTE)));
+
+        requisicao.perform(put("/endereco/3")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"cidade\": \"Santos\" }"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /endereco/{id}: GERENTE altera o de um vendedor e recebe 200")
+    void autorizacaoGerenteAlteraEnderecoDeVendedor() throws Exception {
+        when(usuarioRepositorio.findByEnderecoId(3L)).thenReturn(Optional.of(usuarioComPerfil(5L, PerfilUsuario.VENDEDOR)));
+        when(servico.atualizar(anyLong(), any(Endereco.class))).thenReturn(endereco(3L, "Santos"));
+
+        requisicao.perform(put("/endereco/3")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"cidade\": \"Santos\" }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /endereco/{id}: GERENTE exclui endereco de empresa e recebe 403")
+    void autorizacaoGerenteExcluiEnderecoDaEmpresa() throws Exception {
+        when(empresaRepositorio.findByEnderecoId(3L)).thenReturn(Optional.of(new Empresa()));
+
+        requisicao.perform(delete("/endereco/3"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /endereco/{id}: GERENTE exclui o de um administrador e recebe 403")
+    void autorizacaoGerenteExcluiEnderecoDeAdministrador() throws Exception {
+        when(usuarioRepositorio.findByEnderecoId(3L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR)));
+
+        requisicao.perform(delete("/endereco/3"))
+                .andExpect(status().isForbidden());
 
         verifyNoInteractions(servico);
     }

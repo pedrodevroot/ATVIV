@@ -7,6 +7,7 @@ import javax.validation.Valid;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.autobots.automanager.configuracao.Autorizacoes;
 import com.autobots.automanager.conversores.ServicoConversor;
 import com.autobots.automanager.dtos.ServicoAtualizacaoDto;
 import com.autobots.automanager.dtos.ServicoCadastroDto;
@@ -33,6 +35,7 @@ public class ServicoControle {
     @Autowired
     private AdicionadorLinkServico adicionadorLink;
 
+    @PreAuthorize(Autorizacoes.FUNCIONARIOS)
     @GetMapping("/empresa/{empresaId}/servicos")
     public ResponseEntity<List<ServicoDto>> obterServicos(@PathVariable long empresaId) {
         List<ServicoDto> resposta = conversor.paraResposta(servico.listarPorEmpresa(empresaId));
@@ -40,6 +43,7 @@ public class ServicoControle {
         return ResponseEntity.ok(resposta);
     }
 
+    @PreAuthorize(Autorizacoes.ADMINISTRADOR_GERENTE)
     @PostMapping("/empresa/{empresaId}/servicos")
     public ResponseEntity<ServicoDto> cadastrarServico(@PathVariable long empresaId,
             @Valid @RequestBody ServicoCadastroDto dto) {
@@ -50,6 +54,7 @@ public class ServicoControle {
                 .body(resposta);
     }
 
+    @PreAuthorize(Autorizacoes.FUNCIONARIOS)
     @GetMapping("/servico/{id}")
     public ResponseEntity<ServicoDto> obterServico(@PathVariable long id) {
         ServicoDto resposta = conversor.paraResposta(servico.obterPorId(id));
@@ -57,6 +62,7 @@ public class ServicoControle {
         return ResponseEntity.ok(resposta);
     }
 
+    @PreAuthorize(Autorizacoes.ADMINISTRADOR_GERENTE)
     @PutMapping("/servico/{id}")
     public ResponseEntity<ServicoDto> atualizarServico(@PathVariable long id,
             @Valid @RequestBody ServicoAtualizacaoDto dto) {
@@ -66,6 +72,7 @@ public class ServicoControle {
         return ResponseEntity.ok(resposta);
     }
 
+    @PreAuthorize(Autorizacoes.ADMINISTRADOR_GERENTE)
     @DeleteMapping("/servico/{id}")
     public ResponseEntity<Void> excluirServico(@PathVariable long id) {
         servico.excluir(id);

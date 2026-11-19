@@ -1,8 +1,7 @@
-name: autobots-atviii
+name: autobots-atviv
 
 services:
 
-  # Banco de dados compartilhado pelos microsservicos do AutoBots.
   postgres:
     image: postgres:16-alpine
     environment:
@@ -23,10 +22,12 @@ services:
 
   automanager:
     build: .
-    image: autobots/automanager:1.0
+    image: autobots/automanager:2.0
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
+      JWT_SECRET: autobots-automanager-atviv-docker-segredo-jwt-hs512-com-64-caracteres-ou-mais
+      JWT_EXPIRATION: 3600000
     ports:
       - "18080:8080"
     depends_on:

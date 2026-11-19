@@ -9,6 +9,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -20,6 +21,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.math.BigDecimal;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,8 +34,13 @@ import org.springframework.context.annotation.Import;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.http.MediaType;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import com.autobots.automanager.adaptadores.UserDetailsImpl;
+import com.autobots.automanager.configuracao.SegurancaTesteConfiguracao;
 import com.autobots.automanager.conversores.VendaConversor;
 import com.autobots.automanager.dtos.VendaAtualizacaoDto;
 import com.autobots.automanager.dtos.VendaCadastroDto;
@@ -43,13 +51,17 @@ import com.autobots.automanager.entidades.Servico;
 import com.autobots.automanager.entidades.Usuario;
 import com.autobots.automanager.entidades.Veiculo;
 import com.autobots.automanager.entidades.Venda;
+import com.autobots.automanager.enumeracoes.PerfilUsuario;
 import com.autobots.automanager.excecoes.ConflitoException;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
+import com.autobots.automanager.excecoes.RespostaSeguranca;
 import com.autobots.automanager.modelo.AdicionadorLinkVenda;
+import com.autobots.automanager.repositorios.VendaRepositorio;
 import com.autobots.automanager.servicos.VendaServico;
 
 @WebMvcTest(VendaControle.class)
-@Import({ VendaConversor.class, AdicionadorLinkVenda.class })
+@Import({ VendaConversor.class, AdicionadorLinkVenda.class, SegurancaTesteConfiguracao.class })
+@WithMockUser(roles = "ADMINISTRADOR")
 class VendaControleTest {
 
     private static final String CORPO = """
@@ -62,6 +74,9 @@ class VendaControleTest {
 
     @MockBean
     private VendaServico servico;
+
+    @Autowired
+    private VendaRepositorio vendaRepositorio;
 
     private Usuario usuario(long id) {
         Usuario usuario = new Usuario();
@@ -406,5 +421,360 @@ class VendaControleTest {
         ArgumentCaptor<VendaAtualizacaoDto> captor = ArgumentCaptor.forClass(VendaAtualizacaoDto.class);
         verify(servico).atualizar(anyLong(), captor.capture());
         assertTrue(captor.getValue().getRemoverVeiculo());
+    }
+
+    private Venda vendaDe(Long id, long clienteId, long funcionarioId) {
+        Venda venda = venda(id);
+        venda.setCliente(usuario(clienteId));
+        venda.setFuncionario(usuario(funcionarioId));
+        return venda;
+    }
+
+    private RequestPostProcessor logado(Long id, PerfilUsuario perfil) {
+        return user(new UserDetailsImpl(id, id, "usuario" + id, "hash", Set.of(perfil), true));
+    }
+
+    private String corpoComFuncionario(long funcionarioId) {
+        return CORPO.replace("\"funcionarioId\": 1", "\"funcionarioId\": " + funcionarioId);
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /venda/{id}: 401 sem autenticacao")
+    void autorizacaoObterSemAutenticacao() throws Exception {
+        requisicao.perform(get("/venda/100"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.NAO_AUTENTICADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("POST /empresa/{id}/vendas: 401 sem autenticacao")
+    void autorizacaoCadastrarSemAutenticacao() throws Exception {
+        requisicao.perform(post("/empresa/1/vendas")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /empresa/{id}/vendas: 401 sem autenticacao")
+    void autorizacaoListarSemAutenticacao() throws Exception {
+        requisicao.perform(get("/empresa/1/vendas"))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("POST /empresa/{id}/vendas: VENDEDOR cria venda propria e recebe 201")
+    void autorizacaoVendedorCriaVendaPropria() throws Exception {
+        when(servico.criar(anyLong(), any(VendaCadastroDto.class))).thenReturn(vendaDe(100L, 3L, 6L));
+
+        requisicao.perform(post("/empresa/1/vendas").with(logado(6L, PerfilUsuario.VENDEDOR))
+                .contentType(MediaType.APPLICATION_JSON).content(corpoComFuncionario(6L)))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", "/venda/100"));
+    }
+
+    @Test
+    @DisplayName("POST /empresa/{id}/vendas: VENDEDOR cria venda de outro funcionario e recebe 403")
+    void autorizacaoVendedorCriaVendaDeOutro() throws Exception {
+        requisicao.perform(post("/empresa/1/vendas").with(logado(6L, PerfilUsuario.VENDEDOR))
+                .contentType(MediaType.APPLICATION_JSON).content(corpoComFuncionario(7L)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("POST /empresa/{id}/vendas: VENDEDOR sem id no principal recebe 403")
+    void autorizacaoVendedorSemIdCriaVenda() throws Exception {
+        requisicao.perform(post("/empresa/1/vendas")
+                .contentType(MediaType.APPLICATION_JSON).content(corpoComFuncionario(6L)))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("POST /empresa/{id}/vendas: GERENTE cria venda com qualquer funcionario e recebe 201")
+    void autorizacaoGerenteCriaVenda() throws Exception {
+        when(servico.criar(anyLong(), any(VendaCadastroDto.class))).thenReturn(vendaDe(100L, 3L, 7L));
+
+        requisicao.perform(post("/empresa/1/vendas")
+                .contentType(MediaType.APPLICATION_JSON).content(corpoComFuncionario(7L)))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", "/venda/100"));
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("POST /empresa/{id}/vendas: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteCriaVenda() throws Exception {
+        requisicao.perform(post("/empresa/1/vendas")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "FORNECEDOR")
+    @DisplayName("POST /empresa/{id}/vendas: FORNECEDOR recebe 403 sem chamar o servico")
+    void autorizacaoFornecedorCriaVenda() throws Exception {
+        requisicao.perform(post("/empresa/1/vendas")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /venda/{id}: VENDEDOR recebe 403 sem chamar o servico")
+    void autorizacaoVendedorAltera() throws Exception {
+        requisicao.perform(put("/venda/100")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"removerVeiculo\": true }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("DELETE /venda/{id}: VENDEDOR recebe 403 sem chamar o servico")
+    void autorizacaoVendedorExclui() throws Exception {
+        requisicao.perform(delete("/venda/100"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("PUT e DELETE /venda/{id}: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteAlteraEExclui() throws Exception {
+        requisicao.perform(put("/venda/100")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"removerVeiculo\": true }"))
+                .andExpect(status().isForbidden());
+        requisicao.perform(delete("/venda/100"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /venda/{id}: GERENTE altera e recebe 200")
+    void autorizacaoGerenteAltera() throws Exception {
+        when(servico.atualizar(anyLong(), any(VendaAtualizacaoDto.class))).thenReturn(venda(100L));
+
+        requisicao.perform(put("/venda/100")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"removerVeiculo\": true }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /venda/{id}: GERENTE exclui e recebe 204")
+    void autorizacaoGerenteExclui() throws Exception {
+        requisicao.perform(delete("/venda/100"))
+                .andExpect(status().isNoContent());
+
+        verify(servico).excluir(100L);
+    }
+
+    @Test
+    @DisplayName("GET /venda/{id}: CLIENTE le venda em que e o cliente e recebe 200")
+    void autorizacaoClienteLeVendaPropria() throws Exception {
+        when(vendaRepositorio.findById(100L)).thenReturn(Optional.of(vendaDe(100L, 3L, 1L)));
+        when(servico.obterPorId(100L)).thenReturn(vendaDe(100L, 3L, 1L));
+
+        requisicao.perform(get("/venda/100").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(100));
+    }
+
+    @Test
+    @DisplayName("GET /venda/{id}: CLIENTE le venda de outro cliente e recebe 403")
+    void autorizacaoClienteLeVendaDeOutro() throws Exception {
+        when(vendaRepositorio.findById(100L)).thenReturn(Optional.of(vendaDe(100L, 9L, 1L)));
+
+        requisicao.perform(get("/venda/100").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /venda/{id}: VENDEDOR le venda propria e recebe 200")
+    void autorizacaoVendedorLeVendaPropria() throws Exception {
+        when(vendaRepositorio.findById(100L)).thenReturn(Optional.of(vendaDe(100L, 3L, 6L)));
+        when(servico.obterPorId(100L)).thenReturn(vendaDe(100L, 3L, 6L));
+
+        requisicao.perform(get("/venda/100").with(logado(6L, PerfilUsuario.VENDEDOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(100));
+    }
+
+    @Test
+    @DisplayName("GET /venda/{id}: VENDEDOR le venda de outro funcionario e recebe 403")
+    void autorizacaoVendedorLeVendaDeOutro() throws Exception {
+        when(vendaRepositorio.findById(100L)).thenReturn(Optional.of(vendaDe(100L, 3L, 7L)));
+
+        requisicao.perform(get("/venda/100").with(logado(6L, PerfilUsuario.VENDEDOR)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("GET /venda/{id}: GERENTE le qualquer venda sem consultar o repositorio")
+    void autorizacaoGerenteLeVenda() throws Exception {
+        when(servico.obterPorId(100L)).thenReturn(vendaDe(100L, 9L, 7L));
+
+        requisicao.perform(get("/venda/100"))
+                .andExpect(status().isOk());
+
+        verifyNoInteractions(vendaRepositorio);
+    }
+
+    @Test
+    @DisplayName("GET /venda/{id}: ADMINISTRADOR le qualquer venda sem consultar o repositorio")
+    void autorizacaoAdministradorLeVenda() throws Exception {
+        when(servico.obterPorId(100L)).thenReturn(vendaDe(100L, 9L, 7L));
+
+        requisicao.perform(get("/venda/100"))
+                .andExpect(status().isOk());
+
+        verifyNoInteractions(vendaRepositorio);
+    }
+
+    @Test
+    @WithMockUser(roles = "FORNECEDOR")
+    @DisplayName("GET /venda/{id}: FORNECEDOR recebe 403 sem consultar servico nem repositorio")
+    void autorizacaoFornecedorLeVenda() throws Exception {
+        requisicao.perform(get("/venda/1"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+        verifyNoInteractions(vendaRepositorio);
+    }
+
+    @Test
+    @DisplayName("GET /empresa/{id}/vendas: CLIENTE recebe so as vendas em que e o cliente")
+    void autorizacaoClienteListaDaEmpresa() throws Exception {
+        when(servico.listarPorEmpresa(1L)).thenReturn(List.of(vendaDe(100L, 3L, 1L), vendaDe(101L, 9L, 1L)));
+
+        requisicao.perform(get("/empresa/1/vendas").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(100));
+    }
+
+    @Test
+    @DisplayName("GET /empresa/{id}/vendas: VENDEDOR recebe so as vendas que fez")
+    void autorizacaoVendedorListaDaEmpresa() throws Exception {
+        when(servico.listarPorEmpresa(1L)).thenReturn(List.of(vendaDe(100L, 3L, 6L), vendaDe(101L, 3L, 7L)));
+
+        requisicao.perform(get("/empresa/1/vendas").with(logado(6L, PerfilUsuario.VENDEDOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(100));
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}/vendas: CLIENTE recebe so as vendas em que e o cliente")
+    void autorizacaoClienteListaDoUsuario() throws Exception {
+        when(servico.listarPorUsuario(3L)).thenReturn(List.of(vendaDe(100L, 3L, 1L), vendaDe(101L, 9L, 3L)));
+
+        requisicao.perform(get("/usuario/3/vendas").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(100));
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}/vendas: VENDEDOR recebe so as vendas que fez")
+    void autorizacaoVendedorListaDoUsuario() throws Exception {
+        when(servico.listarPorUsuario(3L)).thenReturn(List.of(vendaDe(100L, 3L, 6L), vendaDe(101L, 3L, 7L)));
+
+        requisicao.perform(get("/usuario/3/vendas").with(logado(6L, PerfilUsuario.VENDEDOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(100));
+    }
+
+    @Test
+    @DisplayName("GET /veiculo/{id}/vendas: CLIENTE recebe so as vendas em que e o cliente")
+    void autorizacaoClienteListaDoVeiculo() throws Exception {
+        when(servico.listarPorVeiculo(5L)).thenReturn(List.of(vendaDe(100L, 3L, 1L), vendaDe(101L, 9L, 1L)));
+
+        requisicao.perform(get("/veiculo/5/vendas").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(100));
+    }
+
+    @Test
+    @DisplayName("GET /veiculo/{id}/vendas: VENDEDOR recebe so as vendas que fez")
+    void autorizacaoVendedorListaDoVeiculo() throws Exception {
+        when(servico.listarPorVeiculo(5L)).thenReturn(List.of(vendaDe(100L, 3L, 6L), vendaDe(101L, 3L, 7L)));
+
+        requisicao.perform(get("/veiculo/5/vendas").with(logado(6L, PerfilUsuario.VENDEDOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(100));
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("GET /empresa/{id}/vendas: GERENTE recebe todas as vendas")
+    void autorizacaoGerenteListaTodas() throws Exception {
+        when(servico.listarPorEmpresa(1L)).thenReturn(List.of(vendaDe(100L, 3L, 6L), vendaDe(101L, 9L, 7L)));
+
+        requisicao.perform(get("/empresa/1/vendas"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2));
+
+        verifyNoInteractions(vendaRepositorio);
+    }
+
+    @Test
+    @DisplayName("GET /empresa/{id}/vendas: ADMINISTRADOR recebe todas as vendas")
+    void autorizacaoAdministradorListaTodas() throws Exception {
+        when(servico.listarPorEmpresa(1L)).thenReturn(List.of(vendaDe(100L, 3L, 6L), vendaDe(101L, 9L, 7L)));
+
+        requisicao.perform(get("/empresa/1/vendas"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2));
+    }
+
+    @Test
+    @WithMockUser(roles = "FORNECEDOR")
+    @DisplayName("GET /empresa/{id}/vendas: FORNECEDOR recebe 403 sem chamar o servico")
+    void autorizacaoFornecedorListaVendas() throws Exception {
+        requisicao.perform(get("/empresa/1/vendas"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
     }
 }

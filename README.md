@@ -1,21 +1,21 @@
-# AutoBots — Automanager (ATVIII: atualização de base)
+# AutoBots — Automanager (ATVIV: atualização de segurança)
 
 API REST do **Automanager**, sistema de gestão da AutoBots para lojas de
 manutenção veicular e venda de autopeças.
 
-**Atividade ATVIII** — Prof. Dr. Eng. Gerson Penha
+**Atividade ATVIV** — Prof. Dr. Eng. Gerson Penha
 
-Continuação da ATVII. Nesta etapa o sistema deixou de cadastrar apenas clientes e
-passou a registrar empresas, usuários, veículos, mercadorias, serviços e vendas,
-com CRUD e HATEOAS em todas as entidades.
+Continuação da ATVIII. Nesta etapa a API passou a exigir autenticação e autorização
+via JSON Web Token (JWT): o usuário faz login, recebe um token assinado e o envia no
+cabeçalho de cada requisição; cada perfil (administrador, gerente, vendedor e cliente)
+só executa o que a Tabela 1 do enunciado permite.
 
 | Funcionalidade pedida | Onde está |
 |---|---|
-| Cadastro de empresa | [`/empresa`](#empresa) |
-| Associação de usuários a uma empresa | [`/empresa/{id}/usuarios`](#empresa) |
-| Tipos de usuário: cliente, fornecedor ou funcionário | campo `perfis` em [`/usuario`](#usuário) |
-| Cadastro de veículos, mercadorias e serviços, para gerenciar vendas e serviços prestados a um usuário e seu veículo | [`/veiculo`](#veículo), [`/mercadoria`](#mercadoria), [`/servico`](#serviço), [`/venda`](#venda) |
-| Credencial de acesso do usuário ao sistema | [`/credencial`](#credencial) |
+| Autenticação via JSON Web Token (JWT) | [`POST /login`](#autenticação) |
+| Token enviado no cabeçalho das requisições | header `Authorization: Bearer <token>` |
+| Perfis Administrador, Gerente, Vendedor e Cliente | campo `perfis` em [`/usuario`](#usuário) |
+| Autorizações de cada perfil (Tabela 1) | [Perfis e autorizações](#perfis-e-autorizações) |
 
 ---
 
@@ -27,6 +27,8 @@ com CRUD e HATEOAS em todas as entidades.
 | Spring Boot | 2.6.3 |
 | Spring Data JPA / Hibernate | 5.6 |
 | Spring HATEOAS | 1.4.1 |
+| Spring Security | 5.6 |
+| JJWT (JSON Web Token) | 0.11.5 |
 | PostgreSQL | 16 |
 | Docker Compose | — |
 
@@ -45,13 +47,13 @@ As portas `18080` (API) e `5433` (PostgreSQL) precisam estar livres.
 ## Como executar
 
 ```bash
-git clone https://github.com/pedrodevroot/ATVIII.git
-cd ATVIII
+git clone https://github.com/pedrodevroot/ATVIV.git
+cd ATVIV
 docker compose up -d --build
 ```
 
-Nada para configurar: usuário, senha e nome do banco já estão no
-`docker-compose.yml`.
+Nada para configurar: usuário, senha e nome do banco, e também o segredo do JWT, já
+estão no `docker-compose.yml`.
 
 | | Endereço |
 |---|---|
@@ -62,15 +64,29 @@ O comando sobe dois containers: o PostgreSQL e o microsserviço. Na primeira
 subida, os [dados de demonstração](#dados-de-demonstração) são cadastrados
 automaticamente.
 
-> **A ATVII está rodando nesta máquina?** O banco desta atividade é separado, mas as
-> duas usam as mesmas portas. Antes do `up`, pare a ATVII com `docker compose down`
+> **A ATVIII está rodando nesta máquina?** O banco desta atividade é separado, mas as
+> duas usam as mesmas portas. Antes do `up`, pare a ATVIII com `docker compose down`
 > na pasta dela.
 
 ### Conferir se subiu
 
 ```bash
 docker compose ps
-curl http://localhost:18080/usuario/usuarios
+curl -i http://localhost:18080/usuario/usuarios
+```
+
+Sem token, a API responde `401`. Para entrar, faça o login com um usuário da
+[carga inicial](#dados-de-demonstração):
+
+```bash
+curl -i -X POST http://localhost:18080/login -H "Content-Type: application/json" -d '{ "nomeUsuario": "dompedroadmin", "senha": "123456" }'
+```
+
+O token vem no header `Authorization` da resposta e no campo `token` do corpo. Com
+ele, a listagem responde `200`:
+
+```bash
+curl http://localhost:18080/usuario/usuarios -H "Authorization: Bearer <token>"
 ```
 
 ### Parar
@@ -88,7 +104,7 @@ docker compose down -v     # para e apaga o banco
 ./mvnw test          # Windows: .\mvnw.cmd test
 ```
 
-São **568 testes automatizados**.
+São **897 testes automatizados**.
 
 Os testes **não precisam de Docker nem de PostgreSQL** — os de integração usam
 banco H2 em memória. Precisam apenas de **Java 17** ou mais recente instalado; o
@@ -96,12 +112,16 @@ Maven vem junto com o projeto, no `mvnw`.
 
 | Camada | Testes | Ferramenta |
 |---|---|---|
-| Regras de domínio | 50 | JUnit 5 |
+| Regras de domínio | 51 | JUnit 5 |
 | Conversores DTO | 52 | JUnit 5 |
-| Serviços | 178 | JUnit 5 + Mockito |
-| Controllers (incluindo os links) | 217 | MockMvc |
+| Serviços | 190 | JUnit 5 + Mockito |
+| Controllers (incluindo os links e as permissões) | 403 | MockMvc |
 | Mapeamento JPA | 29 | H2 |
+| Consultas de acesso | 8 | H2 |
+| JWT, login e filtro | 33 | JUnit 5 + Mockito, MockMvc |
+| Regras de autorização | 40 | JUnit 5 + Mockito |
 | Integração ponta a ponta (incluindo a navegação pelos links) | 42 | H2 |
+| Integração de segurança (login, 401, 403 e Tabela 1) | 49 | H2 |
 
 Para rodar os testes sem instalar Java, dentro de um container:
 
@@ -121,8 +141,8 @@ As classes seguem o diagrama da Figura 1 do enunciado.
 | Entidade | O que representa | Ligações |
 |---|---|---|
 | `Empresa` | Unidade comercial que oferece os serviços e vende as mercadorias | endereço, telefones, usuários, mercadorias, serviços e vendas |
-| `Usuario` | Cliente, fornecedor ou funcionário (`perfis`) | empresa, endereço, telefones, documentos, e-mails, credenciais, veículos, mercadorias fornecidas e vendas |
-| `Credencial` | Acesso ao sistema: `CredencialUsuarioSenha` ou `CredencialCodigoBarra` | usuário |
+| `Usuario` | Administrador, gerente, vendedor, cliente ou fornecedor (`perfis`) | empresa, endereço, telefones, documentos, e-mails, credenciais, veículos, mercadorias fornecidas e vendas |
+| `Credencial` | Acesso ao sistema: `CredencialUsuarioSenha`, com a senha gravada em BCrypt e usada no login quando está ativa, ou `CredencialCodigoBarra` | usuário |
 | `Veiculo` | Carro de um usuário: tipo, modelo e placa | proprietário e vendas |
 | `Mercadoria` | Peça ou produto: validade, fabricação, quantidade e valor | empresa e fornecedor |
 | `Servico` | Trabalho oferecido pela oficina: nome, valor e descrição | empresa |
@@ -132,9 +152,13 @@ As classes seguem o diagrama da Figura 1 do enunciado.
 
 | Enumeração | Valores |
 |---|---|
-| `PerfilUsuario` | `CLIENTE`, `FUNCIONARIO`, `FORNECEDOR` |
+| `PerfilUsuario` | `ADMINISTRADOR`, `GERENTE`, `VENDEDOR`, `CLIENTE`, `FORNECEDOR` |
 | `TipoDocumento` | `CPF`, `CNPJ`, `RG`, `CNH`, `PASSAPORTE` |
 | `TipoVeiculo` | `HATCH`, `SEDA`, `SUV`, `PICKUP`, `SW` |
+
+O perfil `FUNCIONARIO` da ATVIII foi dividido nos três perfis de funcionário da
+Tabela 1 (`ADMINISTRADOR`, `GERENTE` e `VENDEDOR`): o funcionário de uma venda é quem
+tem um deles.
 
 O diagrama abaixo é a Figura 1 do enunciado com dois acréscimos: `ItemVenda` e
 `ItemServico`. Com as listas diretas da Figura 1, a venda não registra quantas unidades
@@ -234,6 +258,97 @@ classDiagram
 
 ---
 
+## Autenticação e autorização (JWT)
+
+O usuário envia o nome e a senha para `POST /login`. A API confere a senha (BCrypt) e
+devolve um JWT assinado (HS512) que expira em 1 hora. Toda outra requisição envia
+`Authorization: Bearer <token>`. Não há sessão no servidor: o token carrega a identidade.
+
+### Como obter o token
+
+```bash
+curl -i -X POST http://localhost:18080/login -H "Content-Type: application/json" -d '{ "nomeUsuario": "dompedroadmin", "senha": "123456" }'
+```
+
+```json
+{
+  "tipo": "Bearer",
+  "token": "eyJhbGciOiJIUzUxMiJ9...",
+  "expiracao": "2026-11-19T17:43:57.000+00:00",
+  "usuarioId": 4,
+  "_links": { "usuario": { "href": "http://localhost:18080/usuario/4" } }
+}
+```
+
+O mesmo token vem no header `Authorization` da resposta (`Authorization: Bearer ...`).
+
+### Perfis e autorizações
+
+A Tabela 1 do enunciado aplicada às rotas:
+
+| Recurso | Administrador | Gerente | Vendedor | Cliente |
+|---|---|---|---|---|
+| Usuários administradores | CRUD | — | — | — |
+| Usuários gerentes | CRUD | CRUD | — | — |
+| Usuários vendedores | CRUD | CRUD | lê o próprio | — |
+| Usuários clientes | CRUD | CRUD | CRUD | lê o próprio |
+| Fornecedores | CRUD | — | — | — |
+| Dados do cadastro do usuário (telefone, documento, e-mail, endereço, veículo) | CRUD | CRUD, dos usuários que gerencia | CRUD, dos clientes | lê os próprios |
+| Credenciais de usuário já cadastrado | CRUD | CRUD, dos usuários que gerencia | lê as dos clientes | lê as próprias |
+| Empresa | CRUD | — | — | — |
+| Mercadorias | CRUD | CRUD | leitura | — |
+| Serviços | CRUD | CRUD | leitura | — |
+| Vendas | CRUD | CRUD | cria as próprias e lê as próprias | lê as próprias |
+
+Fornecedor é só cadastro, ligado às mercadorias que fornece, e não faz login: só o
+administrador o gerencia. Todo perfil lê o próprio cadastro. Ao criar ou alterar um
+usuário, os perfis atribuídos também precisam ser gerenciáveis por quem faz a operação
+(o gerente não cria um administrador, o vendedor não promove um cliente). Usuário sem
+perfil só é gerenciado pelo administrador. O vendedor não cria, altera nem exclui credencial
+de usuário já cadastrado (só o administrador e o gerente); ele cadastra o cliente novo
+com a credencial no `POST /usuario/cadastro`. As listas mostram só o que o perfil pode ler.
+
+### Respostas 401 e 403
+
+| Situação | Status |
+|---|---|
+| Requisição sem token | `401` |
+| Token inválido ou expirado | `401` |
+| Credencial inativa | `401` |
+| Senha errada, ou usuário inexistente, no login | `401` |
+| Perfil sem permissão para a rota | `403` |
+| Usuário, dado ou venda fora do alcance do perfil | `403` |
+
+### Como foi implementado
+
+| Parte | Arquivo |
+|---|---|
+| Dependências `spring-boot-starter-security` e JJWT | `pom.xml` |
+| Configuração do Spring Security (sem sessão, `/login` público) | `configuracao/Seguranca` |
+| Senha com BCrypt | `configuracao/ConfiguracaoSenha` |
+| Geração e validação do token | `jwt/ProvedorJwt`, `jwt/GeradorJwt`, `jwt/AnalisadorJwt`, `jwt/ValidadorJwt` |
+| Usuário autenticado | `adaptadores/UserDetailsImpl`, `adaptadores/UserDetailsServiceImpl` |
+| Leitura do header `Authorization` | `filtros/Autorizador` |
+| Login | `controles/AutenticacaoControle`, `servicos/AutenticacaoServico` |
+| Perfis exigidos por rota | `@PreAuthorize` com `configuracao/Autorizacoes`, nos controllers |
+| Regras por usuário-alvo e por dono do recurso | `servicos/AutorizacaoServico` |
+| Respostas 401 e 403 em JSON | `excecoes/RespostaSeguranca`, `excecoes/ManipuladorDeExcecoes` |
+
+### Escolhas em relação ao modelo de apoio
+
+O modelo de apoio do enunciado foi seguido na estrutura (filtro que lê o header,
+`UserDetailsService`, `@PreAuthorize`). Em alguns pontos esta API fez outra escolha:
+
+| Situação | Modelo de apoio | Esta API | Motivo |
+|---|---|---|---|
+| Login | Filtro em `/login`, token só no header | `POST /login` em controller, token no header e no corpo | O corpo é validado, os erros seguem o formato da API e o link `usuario` mantém o nível 3 |
+| Biblioteca JWT | JJWT 0.9.1 | JJWT 0.11.5 | A 0.9.1 depende de `javax.xml.bind`, ausente no Java 17 |
+| Perfis | `ROLE_ADMIN`, `ROLE_GERENTE`... no enum | `ADMINISTRADOR`, `GERENTE`... no enum; `ROLE_` só na autoridade | Nomes de negócio no cadastro e nas respostas; o prefixo só existe onde o Spring o exige |
+| Credenciais | Uma por usuário | Lista de credenciais da ATVIII; o login usa a de usuário e senha ativa | Mantém o modelo da ATVIII, em que o usuário também pode ter código de barras |
+| Duração do token | 10 minutos | 1 hora, configurável (`jwt.expiration`) | Uma jornada de uso sem login repetido, e ajustável pelo ambiente |
+
+---
+
 ## Níveis de maturidade (RMM)
 
 O modelo de maturidade de Richardson mede o quanto uma API segue o estilo REST.
@@ -243,12 +358,12 @@ Cada nível inclui o anterior.
 |---|---|---|
 | **0** — Uso do protocolo HTTP | A comunicação acontece por HTTP | Toda a API é exposta por HTTP em `http://localhost:18080` |
 | **1** — URI única por recurso | Cada recurso tem o seu próprio endereço | `/usuario/{id}`, `/empresa/{id}`, `/veiculo/{id}`, `/venda/{id}` e as coleções `/usuario/{id}/veiculos`, `/empresa/{id}/vendas` |
-| **2** — Uso dos métodos e suas semânticas | O método HTTP diz a ação e o status diz o resultado | `GET` lê, `POST` cria, `PUT` atualiza, `DELETE` remove; respostas `200`, `201` + `Location`, `204`, `400`, `404` e `409` |
+| **2** — Uso dos métodos e suas semânticas | O método HTTP diz a ação e o status diz o resultado | `GET` lê, `POST` cria, `PUT` atualiza, `DELETE` remove; respostas `200`, `201` + `Location`, `204`, `400`, `401`, `403`, `404` e `409` |
 | **3** — HATEOAS | A resposta traz os links para os próximos passos | Toda resposta com corpo traz links gerados pelo Spring HATEOAS |
 
 ### Nível 3: HATEOAS
 
-`GET http://localhost:18080/venda/1` (trecho da resposta):
+`GET http://localhost:18080/venda/1`, com o token do administrador (trecho da resposta):
 
 ```json
 {
@@ -279,6 +394,7 @@ Cada nível inclui o anterior.
 
 | Resposta | Links |
 |---|---|
+| O login | `usuario` |
 | Uma empresa | `self`, `empresas`, `usuarios`, `telefones`, `mercadorias`, `servicos`, `vendas` e, se houver, `endereco` |
 | Um usuário | `self`, `usuarios`, `telefones`, `documentos`, `emails`, `credenciais`, `veiculos`, `mercadorias`, `vendas` e, se houver, `endereco` e `empresa` |
 | Um veículo | `self`, `proprietario`, `vendas` |
@@ -291,7 +407,7 @@ Nas listas o Spring representa os links de cada item como
 `"links": [ { "rel": "self", "href": "..." } ]`; num objeto único, como
 `"_links": { "self": { "href": "..." } }` (formato HAL).
 
-Com isso, um cliente da API precisa conhecer apenas o primeiro endereço. A partir
+Com isso, um cliente da API precisa conhecer apenas `POST /login` e o primeiro endereço. A partir
 de `GET /empresa/empresas` ele chega à empresa, às vendas dela, ao veículo da
 venda e ao proprietário do veículo sem montar nenhuma URL. O teste
 `navegacaoAteAVenda` do `IntegracaoVendaTest` faz exatamente esse caminho.
@@ -329,16 +445,27 @@ Cadastrados automaticamente quando o banco está vazio:
 | Recurso | Ids |
 |---|---|
 | Empresa | `1` — Car service toyota ltda |
-| Usuários | `1` funcionário, `2` fornecedor, `3` cliente, todos vinculados à empresa `1` |
+| Usuários | `1` vendedor, `2` fornecedor, `3` cliente, `4` administrador, `5` gerente, todos vinculados à empresa `1` |
 | Veículo | `1` — Corolla Cross, placa `ABC0000`, do cliente `3` |
 | Mercadoria | `1` — roda de liga leve, fornecida pelo usuário `2`, com 22 unidades em estoque |
 | Serviços | `1` troca de rodas, `2` alinhamento, `3` balanceamento |
-| Vendas | `1` e `2` — cliente `3`, funcionário `1`, veículo `1`, com 4 rodas cada |
-| Credenciais | `1` `dompedrofuncionario`, `2` `dompedrofornecedor`, `3` `dompedrocliente`, todas com a senha `123456` |
-| Documentos | `1`, `2`, `3` — um para cada usuário, na mesma ordem |
-| E-mails | `1`, `2`, `3` — um para cada usuário, na mesma ordem |
-| Endereços | `1`, `2`, `3` dos usuários, na mesma ordem, e `4` da empresa |
+| Vendas | `1` e `2` — cliente `3`, vendedor `1`, veículo `1`, com 4 rodas cada |
+| Credenciais | `1` `dompedrovendedor`, `2` `dompedrocliente`, `3` `dompedroadmin`, `4` `dompedrogerente`, todas com a senha `123456`, gravada com BCrypt; o fornecedor não tem credencial |
+| Documentos | `1`, `2`, `3` — um para cada um dos usuários `1`, `2` e `3`, na mesma ordem |
+| E-mails | `1`, `2`, `3` — um para cada um dos usuários `1`, `2` e `3`, na mesma ordem |
+| Endereços | `1`, `2`, `3` dos usuários `1`, `2` e `3`, na mesma ordem, e `4` da empresa |
 | Telefones | `1` do usuário `1` e `2` da empresa |
+
+O administrador e o gerente só têm a credencial; não têm documento, e-mail, endereço nem telefone.
+
+Logins para testar cada perfil:
+
+| Perfil | nomeUsuario | senha |
+|---|---|---|
+| Administrador | `dompedroadmin` | `123456` |
+| Gerente | `dompedrogerente` | `123456` |
+| Vendedor | `dompedrovendedor` | `123456` |
+| Cliente | `dompedrocliente` | `123456` |
 
 ---
 
@@ -346,12 +473,22 @@ Cadastrados automaticamente quando o banco está vazio:
 
 Base: `http://localhost:18080`
 
+Todas as rotas, exceto `POST /login`, exigem `Authorization: Bearer <token>`. As
+tabelas desta seção usam o token do administrador (`dompedroadmin`); o comportamento
+dos outros perfis está em [Casos de segurança](#casos-de-segurança).
+
 Em todo `POST` e `PUT` com corpo, o conteúdo é JSON
 (`Content-Type: application/json`).
 
 As tabelas abaixo podem ser executadas de cima para baixo em um banco recém-criado.
 Os `id` nas URLs valem para essa ordem. Cada `POST` devolve o `id` gerado no corpo
 da resposta e no header `Location` — em outra ordem, é esse valor que deve ser usado.
+
+### Autenticação
+
+| Método | URL | Corpo | Esperado |
+|---|---|---|---|
+| `POST` | `/login` | `{ "nomeUsuario": "dompedroadmin", "senha": "123456" }` | 200 |
 
 ### Usuário
 
@@ -362,7 +499,7 @@ da resposta e no header `Location` — em outra ordem, é esse valor que deve se
 | `POST` | `/usuario/cadastro` | **A** | 201 |
 | `POST` | `/usuario/cadastro` | **B** | 201 |
 | `PUT` | `/usuario/atualizar` | **C** | 200 |
-| `DELETE` | `/usuario/excluir/4` | — | 204 |
+| `DELETE` | `/usuario/excluir/6` | — | 204 |
 
 ### Empresa
 
@@ -373,9 +510,9 @@ da resposta e no header `Location` — em outra ordem, é esse valor que deve se
 | `POST` | `/empresa/cadastro` | **D** | 201 |
 | `PUT` | `/empresa/atualizar` | **E** | 200 |
 | `GET` | `/empresa/1/usuarios` | — | 200 |
-| `PUT` | `/empresa/2/usuarios/5` | — | 204 |
+| `PUT` | `/empresa/2/usuarios/7` | — | 204 |
 | `GET` | `/empresa/2/usuarios` | — | 200 |
-| `DELETE` | `/empresa/2/usuarios/5` | — | 204 |
+| `DELETE` | `/empresa/2/usuarios/7` | — | 204 |
 | `DELETE` | `/empresa/excluir/2` | — | 204 |
 
 Um usuário fica vinculado a uma empresa por vez. A exclusão da empresa apaga as
@@ -489,12 +626,16 @@ menos uma mercadoria ou um serviço.
 | `GET` | `/usuario/1/credenciais` | — | 200 |
 | `POST` | `/usuario/1/credenciais` | **I** | 201 |
 | `POST` | `/usuario/1/credenciais` | **J** | 201 |
-| `GET` | `/credencial/1` | — | 200 |
-| `PUT` | `/credencial/1` | `{ "inativo": true }` | 200 |
-| `DELETE` | `/credencial/1` | — | 204 |
+| `GET` | `/credencial/7` | — | 200 |
+| `PUT` | `/credencial/7` | `{ "inativo": true }` | 200 |
+| `DELETE` | `/credencial/7` | — | 204 |
 
 O tipo é informado no campo `tipo`: `USUARIO_SENHA` ou `CODIGO_BARRA`. A senha
-nunca aparece nas respostas.
+nunca aparece nas respostas. Os exemplos usam a credencial `7`, criada por **I**, e
+não a `1`, para não inativar nem apagar o login do vendedor da carga, que é usado nos
+[casos de segurança](#casos-de-segurança). Criar, alterar e excluir credencial de usuário
+já cadastrado é só do administrador e do gerente (o gerente não mexe nas do administrador
+nem do fornecedor).
 
 ### Endereço
 
@@ -648,7 +789,7 @@ alterar um filho, o `id` dele é obrigatório e ele precisa pertencer ao usuári
 
 ### Casos de erro
 
-Executados depois das tabelas acima.
+Executados depois das tabelas acima, com o token do administrador.
 
 | Método | URL | Corpo | Esperado |
 |---|---|---|---|
@@ -661,12 +802,12 @@ Executados depois das tabelas acima.
 | `DELETE` | `/usuario/excluir/999` | — | 404 |
 | `POST` | `/usuario/999/veiculos` | **L** | 404 |
 | `POST` | `/empresa/999/vendas` | **O** | 404 |
-| `PUT` | `/usuario/atualizar` | `{ "id": 5, "endereco": { "cidade": "Santos" } }` | 404 |
+| `PUT` | `/usuario/atualizar` | `{ "id": 7, "endereco": { "cidade": "Santos" } }` | 404 |
 | `PUT` | `/usuario/atualizar` | `{ "id": 3, "emails": [ { "id": 2, "endereco": "x@email.com" } ] }` | 404 |
 | `PUT` | `/empresa/atualizar` | `{ "id": 1, "telefones": [ { "id": 99, "ddd": "12" } ] }` | 404 |
 | `POST` | `/usuario/cadastro` | `{ "nomeSocial": "Sem nome" }` | 400 |
 | `POST` | `/usuario/cadastro` | `{ "nome": "Sem perfil" }` | 400 |
-| `POST` | `/usuario/cadastro` | `{ "nome": "X", "perfis": [ "GERENTE" ] }` | 400 |
+| `POST` | `/usuario/cadastro` | `{ "nome": "X", "perfis": [ "FUNCIONARIO" ] }` | 400 |
 | `POST` | `/usuario/cadastro` | **Q** | 400 |
 | `PUT` | `/usuario/atualizar` | `{ "nome": "Sem id" }` | 400 |
 | `PUT` | `/usuario/atualizar` | `{ "id": 3, "perfis": [ null ] }` | 400 |
@@ -721,19 +862,19 @@ Executados depois das tabelas acima.
 }
 ```
 
-**S** — o usuário `1` é funcionário, não cliente
+**S** — o usuário `1` é vendedor, não cliente
 ```json
 { "identificacao": "E-1", "clienteId": 1, "funcionarioId": 1, "servicoIds": [ 1 ] }
 ```
 
-**T** — o usuário `3` é cliente, não funcionário
+**T** — o usuário `3` é cliente, não tem perfil de funcionário
 ```json
 { "identificacao": "E-2", "clienteId": 3, "funcionarioId": 3, "servicoIds": [ 1 ] }
 ```
 
-**U** — o veículo `1` não é do cliente `5`
+**U** — o veículo `1` não é do cliente `7`
 ```json
-{ "identificacao": "E-3", "clienteId": 5, "funcionarioId": 1, "veiculoId": 1, "servicoIds": [ 1 ] }
+{ "identificacao": "E-3", "clienteId": 7, "funcionarioId": 1, "veiculoId": 1, "servicoIds": [ 1 ] }
 ```
 
 **V** — venda sem nenhum item
@@ -762,6 +903,45 @@ Executados depois das tabelas acima.
 { "identificacao": "1234698745", "clienteId": 3, "funcionarioId": 1, "servicoIds": [ 1 ] }
 ```
 
+### Casos de segurança
+
+Executados depois de todas as tabelas anteriores. "Cliente", "vendedor", "gerente" e
+"administrador" são os tokens obtidos com os [logins da carga inicial](#dados-de-demonstração).
+
+| Token | Método | URL | Corpo | Esperado |
+|---|---|---|---|---|
+| — | `GET` | `/usuario/usuarios` | — | 401 |
+| `Bearer abc` | `GET` | `/usuario/usuarios` | — | 401 |
+| — | `POST` | `/login` | `{ "nomeUsuario": "dompedroadmin", "senha": "errada" }` | 401 |
+| cliente | `GET` | `/usuario/3` | — | 200 |
+| cliente | `GET` | `/usuario/1` | — | 403 |
+| cliente | `GET` | `/usuario/usuarios` | — | 403 |
+| cliente | `GET` | `/venda/1` | — | 200 |
+| cliente | `GET` | `/mercadoria/1` | — | 403 |
+| cliente | `POST` | `/usuario/cadastro` | **A** | 403 |
+| vendedor | `GET` | `/mercadoria/1` | — | 200 |
+| vendedor | `POST` | `/empresa/1/mercadorias` | **M** | 403 |
+| vendedor | `POST` | `/usuario/cadastro` | `{ "nome": "Cliente do Vendedor", "perfis": [ "CLIENTE" ] }` | 201 |
+| vendedor | `POST` | `/usuario/cadastro` | `{ "nome": "Outro Vendedor", "perfis": [ "VENDEDOR" ] }` | 403 |
+| vendedor | `POST` | `/empresa/1/vendas` | `{ "identificacao": "OS-1001", "clienteId": 3, "funcionarioId": 1, "servicoIds": [ 1 ] }` | 201 |
+| vendedor | `POST` | `/empresa/1/vendas` | `{ "identificacao": "OS-1002", "clienteId": 3, "funcionarioId": 5, "servicoIds": [ 1 ] }` | 403 |
+| vendedor | `PUT` | `/venda/1` | `{ "identificacao": "OS-9999" }` | 403 |
+| vendedor | `PUT` | `/credencial/2` | `{ "senha": "trocada1" }` | 403 |
+| vendedor | `POST` | `/usuario/3/credenciais` | **I** | 403 |
+| gerente | `POST` | `/usuario/cadastro` | `{ "nome": "Novo Admin", "perfis": [ "ADMINISTRADOR" ] }` | 403 |
+| gerente | `GET` | `/usuario/4` | — | 403 |
+| gerente | `PUT` | `/credencial/3` | `{ "senha": "trocada1" }` | 403 |
+| gerente | `POST` | `/empresa/1/vendas` | `{ "identificacao": "OS-1003", "clienteId": 3, "funcionarioId": 5, "servicoIds": [ 1 ] }` | 201 |
+| vendedor | `GET` | `/venda/6` | — | 403 |
+| gerente | `GET` | `/empresa/empresas` | — | 403 |
+| administrador | `POST` | `/usuario/cadastro` | `{ "nome": "Outro Admin", "perfis": [ "ADMINISTRADOR" ] }` | 201 |
+| administrador | `DELETE` | `/usuario/excluir/10` | — | 204 |
+| — | `POST` | `/login` | `{ "nomeUsuario": "dompedrofornecedor", "senha": "123456" }` | 401 |
+
+Os `id` seguem a mesma regra das tabelas anteriores: a venda `6` é a criada pelo gerente
+(`OS-1003`), que o vendedor não pode ler, e o usuário `10` é o administrador criado na
+linha anterior. O último caso mostra que o fornecedor não faz login.
+
 ### Respostas de erro
 
 ```json
@@ -769,7 +949,7 @@ Executados depois das tabelas acima.
   "momento": "2026-11-01T18:01:30.026",
   "status": 400,
   "erro": "Bad Request",
-  "mensagem": "O veiculo de id 1 nao pertence ao cliente de id 5",
+  "mensagem": "O veiculo de id 1 nao pertence ao cliente de id 7",
   "caminho": "/empresa/1/vendas"
 }
 ```
@@ -787,11 +967,37 @@ Erros de validação acrescentam a lista de campos, todos de uma vez:
 }
 ```
 
+Sem token, ou com token inválido ou expirado, a resposta é `401`, com o header
+`WWW-Authenticate: Bearer`:
+
+```json
+{
+  "momento": "2026-11-19T16:44:11.070663739",
+  "status": 401,
+  "erro": "Unauthorized",
+  "mensagem": "Autenticacao necessaria: envie o header Authorization com um token JWT valido no formato Bearer <token>",
+  "caminho": "/usuario/usuarios"
+}
+```
+
+Com token válido, mas de um perfil sem permissão, a resposta é `403`:
+
+```json
+{
+  "momento": "2026-11-19T16:44:11.119676041",
+  "status": 403,
+  "erro": "Forbidden",
+  "mensagem": "O perfil do usuario autenticado nao tem permissao para esta operacao",
+  "caminho": "/usuario/usuarios"
+}
+```
+
 ### Validações e regras
 
 | Campo ou operação | Regra |
 |---|---|
 | `usuario.nome` · `perfis` | obrigatórios no cadastro; ao menos um perfil |
+| `usuario.perfis` | `ADMINISTRADOR`, `GERENTE`, `VENDEDOR`, `CLIENTE` ou `FORNECEDOR` |
 | `usuario.dataNascimento` | se informada, deve estar no passado |
 | `empresa.razaoSocial` | obrigatória no cadastro |
 | `documento.tipo` · `dataEmissao` · `numero` | obrigatórios; a emissão não pode estar no futuro; `numero` é único no sistema |
@@ -800,8 +1006,13 @@ Erros de validação acrescentam a lista de campos, todos de uma vez:
 | `email.endereco` | obrigatório, em formato de e-mail |
 | `endereco.cidade` · `rua` · `numero` | obrigatórios |
 | `endereco.codigoPostal` | se informado, 8 dígitos |
-| `credencial.nomeUsuario` · `senha` | obrigatórios; `nomeUsuario` é único; senha de 6 a 255 caracteres |
+| `credencial.nomeUsuario` · `senha` | obrigatórios; `nomeUsuario` é único; senha de 6 a 72 caracteres, não pode ser só espaços |
+| `credencial.senha` | gravada com BCrypt, inclusive na troca pelo `PUT`; nunca aparece nas respostas |
+| Credencial de usuário já cadastrado | criar, alterar e excluir é só do administrador e do gerente; o vendedor só cadastra credencial junto do cliente novo |
 | `credencial.codigo` | obrigatório, positivo e único |
+| Login | só credencial de usuário e senha ativa; `inativo: true` bloqueia o login e invalida o token em uso; o login preenche `ultimoAcesso` |
+| Token | assinado com HS512 (`jwt.secret`, ao menos 64 caracteres) e válido por 1 hora (`jwt.expiration`) |
+| Rota inexistente sem token | 401 (a autenticação é verificada antes da rota) |
 | `veiculo.tipo` · `modelo` · `placa` | obrigatórios; placa única, no formato `ABC1234` ou `ABC1D23` |
 | `mercadoria.nome` · `fabricacao` · `quantidade` · `valor` | obrigatórios; fabricação não pode estar no futuro; quantidade e valor não podem ser negativos; quantidade de até 999999999 |
 | `mercadoria.validade` | opcional; não pode ser anterior à fabricação |
@@ -809,14 +1020,15 @@ Erros de validação acrescentam a lista de campos, todos de uma vez:
 | `valor` de mercadoria e serviço | até 8 dígitos inteiros e 2 decimais |
 | `venda.identificacao` · `clienteId` · `funcionarioId` | obrigatórios; a identificação é única |
 | Cliente da venda | deve ter o perfil `CLIENTE`; se estiver vinculado a uma empresa, deve ser a da venda |
-| Funcionário da venda | deve ter o perfil `FUNCIONARIO` e estar vinculado à empresa da venda |
+| Funcionário da venda | deve ter o perfil `ADMINISTRADOR`, `GERENTE` ou `VENDEDOR` e estar vinculado à empresa da venda |
+| Venda criada por vendedor | `funcionarioId` deve ser o do próprio vendedor |
 | Veículo da venda | opcional; deve pertencer ao cliente da venda |
 | Conteúdo da venda | ao menos uma mercadoria ou um serviço, sem repetição, todos da empresa da venda |
 | `itens[].mercadoriaId` · `quantidade` | obrigatórios; a quantidade deve ser maior que zero e não pode superar o estoque |
 | Fornecedor da mercadoria | deve ter o perfil `FORNECEDOR`; a mercadoria tem um fornecedor por vez |
 | `PUT` de usuário e empresa | `endereco` exige que já exista um (para criar, use o `POST`); cada filho enviado precisa pertencer ao usuário ou à empresa |
 | Exclusão de veículo, mercadoria ou serviço | recusada se aparecer em alguma venda |
-| Retirada de perfil | `CLIENTE` e `FUNCIONARIO` não saem de quem tem vendas nesse papel; `FORNECEDOR` não sai de quem fornece mercadorias |
+| Retirada de perfil | `CLIENTE` não sai de quem tem vendas como cliente; quem tem vendas como funcionário mantém ao menos um perfil de funcionário; `FORNECEDOR` não sai de quem fornece mercadorias |
 | Veículo no `PUT` de venda | `veiculoId` troca e `removerVeiculo: true` remove; os dois juntos são recusados |
 | `mercadoria.quantidade` | estoque atual: muda com as vendas e pode ser reposto com `PUT /mercadoria/{id}` |
 | Vendas simultâneas | o desconto é feito pelo banco, então duas vendas não levam a mesma unidade |
@@ -828,18 +1040,21 @@ Erros de validação acrescentam a lista de campos, todos de uma vez:
 
 ---
 
-## Alterações da ATVIII
+## Alterações da ATVIV
 
 | O que mudou | Onde |
 |---|---|
-| Classes do novo modelo de dados e enumerações | `entidades`, `enumeracoes` |
-| `Cliente` substituído por `Usuario`, com perfis, e-mails e credenciais | `UsuarioControle`, `UsuarioServico`, `EmailControle`, `CredencialControle` |
-| CRUD de empresa e vínculo de usuários | `EmpresaControle`, `EmpresaServico` |
-| CRUD de veículo | `VeiculoControle`, `VeiculoServico` |
-| CRUD de mercadoria e vínculo com o fornecedor | `MercadoriaControle`, `MercadoriaServico` |
-| CRUD de serviço | `ServicoControle`, `ServicoServico` |
-| CRUD de venda, com as regras de negócio | `VendaControle`, `VendaServico` |
-| Quantidade por item da venda, controle de estoque e histórico de preços | `ItemVenda`, `ItemServico`, `VendaServico`, `MercadoriaRepositorio` |
-| Links para os novos recursos | `modelo/AdicionadorLink*` |
-| Dados de demonstração das novas entidades | `CargaInicial` |
-| Testes de todas as camadas | `src/test` |
+| Dependências de segurança e JWT | `pom.xml` |
+| Perfis da Tabela 1 no lugar de `FUNCIONARIO` | `PerfilUsuario`, `VendaServico`, `UsuarioServico` |
+| Senha gravada com BCrypt | `ConfiguracaoSenha`, `UsuarioServico`, `CredencialServico`, `CargaInicial` |
+| Geração e validação do token | `jwt` |
+| Login com token e link para o usuário | `AutenticacaoControle`, `AutenticacaoServico`, `LoginDto`, `TokenDto`, `AdicionadorLinkToken` |
+| Leitura do header `Authorization` | `filtros/Autorizador` |
+| Configuração do Spring Security | `configuracao/Seguranca` |
+| Autorização por perfil | `configuracao/Autorizacoes` e `@PreAuthorize` nos controllers |
+| Regras por usuário-alvo e por dono do recurso | `AutorizacaoServico` |
+| Respostas 401 e 403 em JSON | `RespostaSeguranca`, `ManipuladorDeExcecoes` |
+| Novos usuários de demonstração, um por perfil | `CargaInicial` |
+| Consultas de acesso | `CredencialRepositorio`, `UsuarioRepositorio`, `EmpresaRepositorio` |
+| Projeto Compose próprio, imagem `2.0` e variáveis do JWT | `docker-compose.yml` |
+| Testes de autenticação, autorização e integração de segurança | `src/test` |

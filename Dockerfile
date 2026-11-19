@@ -1,4 +1,3 @@
-# =====  compila o projeto =====
 FROM maven:3.8.4-eclipse-temurin-17 AS build
 WORKDIR /build
 COPY pom.xml .
@@ -6,7 +5,6 @@ RUN mvn dependency:go-offline -B
 COPY src ./src
 RUN mvn clean package -DskipTests -B
 
-# =====  roda o projeto =====
 FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 RUN addgroup -S autobots && adduser -S autobots -G autobots

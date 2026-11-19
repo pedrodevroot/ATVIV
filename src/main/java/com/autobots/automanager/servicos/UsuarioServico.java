@@ -3,13 +3,16 @@ package com.autobots.automanager.servicos;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.autobots.automanager.entidades.Credencial;
+import com.autobots.automanager.entidades.CredencialUsuarioSenha;
 import com.autobots.automanager.entidades.Documento;
 import com.autobots.automanager.entidades.Email;
 import com.autobots.automanager.entidades.Telefone;
@@ -32,6 +35,8 @@ public class UsuarioServico {
     private VendaRepositorio vendaRepositorio;
     @Autowired
     private UsuarioAtualizador atualizador;
+    @Autowired
+    private PasswordEncoder codificador;
 
     @Transactional
     public Usuario cadastrar(Usuario usuario) {
@@ -40,6 +45,9 @@ public class UsuarioServico {
         usuario.setDataCadastro(agora);
         for (Credencial credencial : usuario.getCredenciais()) {
             credencial.setCriacao(agora);
+            if (credencial instanceof CredencialUsuarioSenha usuarioSenha) {
+                usuarioSenha.setSenha(codificador.encode(usuarioSenha.getSenha()));
+            }
         }
         return repositorio.save(usuario);
     }
@@ -86,16 +94,21 @@ public class UsuarioServico {
             throw new ConflitoException("O usuario de id " + id
                     + " possui vendas como cliente e precisa manter o perfil CLIENTE");
         }
-        if (removeuPerfil(usuario, atualizacao, PerfilUsuario.FUNCIONARIO)
+        if (temPerfilDeFuncionario(usuario.getPerfis()) && !temPerfilDeFuncionario(atualizacao.getPerfis())
                 && vendaRepositorio.existsByFuncionarioId(id)) {
             throw new ConflitoException("O usuario de id " + id
-                    + " possui vendas como funcionario e precisa manter o perfil FUNCIONARIO");
+                    + " possui vendas como funcionario e precisa manter um perfil de funcionario: "
+                    + "ADMINISTRADOR, GERENTE ou VENDEDOR");
         }
         if (removeuPerfil(usuario, atualizacao, PerfilUsuario.FORNECEDOR)
                 && !usuario.getMercadorias().isEmpty()) {
             throw new ConflitoException("O usuario de id " + id
                     + " fornece mercadorias e precisa manter o perfil FORNECEDOR");
         }
+    }
+
+    private boolean temPerfilDeFuncionario(Set<PerfilUsuario> perfis) {
+        return perfis.stream().anyMatch(PerfilUsuario::ehFuncionario);
     }
 
     private boolean removeuPerfil(Usuario usuario, Usuario atualizacao, PerfilUsuario perfil) {

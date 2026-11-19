@@ -7,6 +7,7 @@ import javax.validation.Valid;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.autobots.automanager.configuracao.Autorizacoes;
 import com.autobots.automanager.conversores.MercadoriaConversor;
 import com.autobots.automanager.dtos.MercadoriaAtualizacaoDto;
 import com.autobots.automanager.dtos.MercadoriaCadastroDto;
@@ -33,6 +35,7 @@ public class MercadoriaControle {
     @Autowired
     private AdicionadorLinkMercadoria adicionadorLink;
 
+    @PreAuthorize(Autorizacoes.FUNCIONARIOS)
     @GetMapping("/empresa/{empresaId}/mercadorias")
     public ResponseEntity<List<MercadoriaDto>> obterMercadorias(@PathVariable long empresaId) {
         List<MercadoriaDto> resposta = conversor.paraResposta(servico.listarPorEmpresa(empresaId));
@@ -40,6 +43,7 @@ public class MercadoriaControle {
         return ResponseEntity.ok(resposta);
     }
 
+    @PreAuthorize(Autorizacoes.ADMINISTRADOR_GERENTE)
     @PostMapping("/empresa/{empresaId}/mercadorias")
     public ResponseEntity<MercadoriaDto> cadastrarMercadoria(@PathVariable long empresaId,
             @Valid @RequestBody MercadoriaCadastroDto dto) {
@@ -50,6 +54,7 @@ public class MercadoriaControle {
                 .body(resposta);
     }
 
+    @PreAuthorize(Autorizacoes.FUNCIONARIOS)
     @GetMapping("/mercadoria/{id}")
     public ResponseEntity<MercadoriaDto> obterMercadoria(@PathVariable long id) {
         MercadoriaDto resposta = conversor.paraResposta(servico.obterPorId(id));
@@ -57,6 +62,7 @@ public class MercadoriaControle {
         return ResponseEntity.ok(resposta);
     }
 
+    @PreAuthorize(Autorizacoes.ADMINISTRADOR_GERENTE)
     @PutMapping("/mercadoria/{id}")
     public ResponseEntity<MercadoriaDto> atualizarMercadoria(@PathVariable long id,
             @Valid @RequestBody MercadoriaAtualizacaoDto dto) {
@@ -65,12 +71,14 @@ public class MercadoriaControle {
         return ResponseEntity.ok(resposta);
     }
 
+    @PreAuthorize(Autorizacoes.ADMINISTRADOR_GERENTE)
     @DeleteMapping("/mercadoria/{id}")
     public ResponseEntity<Void> excluirMercadoria(@PathVariable long id) {
         servico.excluir(id);
         return ResponseEntity.noContent().build();
     }
 
+    @PreAuthorize(Autorizacoes.FUNCIONARIOS)
     @GetMapping("/usuario/{usuarioId}/mercadorias")
     public ResponseEntity<List<MercadoriaDto>> obterMercadoriasDoFornecedor(@PathVariable long usuarioId) {
         List<MercadoriaDto> resposta = conversor.paraResposta(servico.listarPorFornecedor(usuarioId));
@@ -78,6 +86,7 @@ public class MercadoriaControle {
         return ResponseEntity.ok(resposta);
     }
 
+    @PreAuthorize(Autorizacoes.ADMINISTRADOR_GERENTE)
     @PutMapping("/usuario/{usuarioId}/mercadorias/{mercadoriaId}")
     public ResponseEntity<Void> vincularFornecedor(@PathVariable long usuarioId,
             @PathVariable long mercadoriaId) {
@@ -85,6 +94,7 @@ public class MercadoriaControle {
         return ResponseEntity.noContent().build();
     }
 
+    @PreAuthorize(Autorizacoes.ADMINISTRADOR_GERENTE)
     @DeleteMapping("/usuario/{usuarioId}/mercadorias/{mercadoriaId}")
     public ResponseEntity<Void> desvincularFornecedor(@PathVariable long usuarioId,
             @PathVariable long mercadoriaId) {

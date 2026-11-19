@@ -1,6 +1,7 @@
 package com.autobots.automanager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -8,19 +9,21 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 import org.springframework.test.web.servlet.ResultActions;
 
 import com.jayway.jsonpath.JsonPath;
 
 @SpringBootTest(properties = "spring.datasource.url=jdbc:h2:mem:autobots-venda;DB_CLOSE_DELAY=-1")
-@AutoConfigureMockMvc
 class IntegracaoVendaTest {
 
     private static final String MERCADORIA = """
@@ -31,7 +34,20 @@ class IntegracaoVendaTest {
             """;
 
     @Autowired
+    private WebApplicationContext contexto;
+
     private MockMvc requisicao;
+
+    @BeforeEach
+    void autenticar() throws Exception {
+        MockMvc semToken = MockMvcBuilders.webAppContextSetup(contexto).apply(springSecurity()).build();
+        String token = semToken.perform(post("/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{ \"nomeUsuario\": \"dompedroadmin\", \"senha\": \"123456\" }"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getHeader(HttpHeaders.AUTHORIZATION);
+        requisicao = MockMvcBuilders.webAppContextSetup(contexto).apply(springSecurity())
+                .defaultRequest(get("/").header(HttpHeaders.AUTHORIZATION, token)).build();
+    }
 
     private long criar(String url, String corpo) throws Exception {
         String resposta = requisicao.perform(post(url)
@@ -65,7 +81,7 @@ class IntegracaoVendaTest {
     }
 
     private long funcionarioDa(long empresaId) throws Exception {
-        long funcionario = usuario("FUNCIONARIO");
+        long funcionario = usuario("VENDEDOR");
         requisicao.perform(put("/empresa/" + empresaId + "/usuarios/" + funcionario))
                 .andExpect(status().isNoContent());
         return funcionario;
@@ -258,7 +274,7 @@ class IntegracaoVendaTest {
         long outroCliente = usuario("CLIENTE");
         long funcionario = funcionarioDa(empresa);
         long funcionarioDeOutra = funcionarioDa(outraEmpresa);
-        long semVinculo = usuario("FUNCIONARIO");
+        long semVinculo = usuario("VENDEDOR");
         long carro = veiculo(cliente, "CCC1C11");
         long carroDeOutro = veiculo(outroCliente, "DDD1D11");
         long mercadoria = criar("/empresa/" + empresa + "/mercadorias", MERCADORIA);

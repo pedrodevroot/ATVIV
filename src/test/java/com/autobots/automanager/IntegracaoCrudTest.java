@@ -1,7 +1,9 @@
 package com.autobots.automanager;
 
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -13,28 +15,43 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 
 import com.autobots.automanager.repositorios.UsuarioRepositorio;
 import com.autobots.automanager.repositorios.VendaRepositorio;
 import com.jayway.jsonpath.JsonPath;
 
 @SpringBootTest
-@AutoConfigureMockMvc
 class IntegracaoCrudTest {
 
     @Autowired
+    private WebApplicationContext contexto;
+
     private MockMvc requisicao;
     @Autowired
     private UsuarioRepositorio repositorio;
     @Autowired
     private VendaRepositorio vendaRepositorio;
+
+    @BeforeEach
+    void autenticar() throws Exception {
+        MockMvc semToken = MockMvcBuilders.webAppContextSetup(contexto).apply(springSecurity()).build();
+        String token = semToken.perform(post("/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{ \"nomeUsuario\": \"dompedroadmin\", \"senha\": \"123456\" }"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getHeader(HttpHeaders.AUTHORIZATION);
+        requisicao = MockMvcBuilders.webAppContextSetup(contexto).apply(springSecurity())
+                .defaultRequest(get("/").header(HttpHeaders.AUTHORIZATION, token)).build();
+    }
 
     private long cadastrar(String corpo) throws Exception {
         String resposta = requisicao.perform(post("/usuario/cadastro")
@@ -162,12 +179,12 @@ class IntegracaoCrudTest {
     void enumInvalidoNoJson() throws Exception {
         requisicao.perform(post("/usuario/cadastro")
                 .contentType(MediaType.APPLICATION_JSON).content("""
-                        { "nome": "Perfil Errado", "perfis": [ "GERENTE" ] }
+                        { "nome": "Perfil Errado", "perfis": [ "FUNCIONARIO" ] }
                         """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(jsonPath("$.mensagem").value(
-                        "O valor GERENTE nao e aceito. Valores aceitos: [CLIENTE, FUNCIONARIO, FORNECEDOR]."));
+                        "O valor FUNCIONARIO nao e aceito. Valores aceitos: [ADMINISTRADOR, GERENTE, VENDEDOR, CLIENTE, FORNECEDOR]."));
     }
 
     @Test
@@ -313,7 +330,7 @@ class IntegracaoCrudTest {
     @DisplayName("ciclo completo da credencial: criar, desativar, trocar a senha e remover")
     void cicloCompletoDaCredencial() throws Exception {
         long idUsuario = cadastrar("""
-                { "nome": "Dono da Credencial", "perfis": [ "FUNCIONARIO" ] }
+                { "nome": "Dono da Credencial", "perfis": [ "VENDEDOR" ] }
                 """);
 
         long idCredencial = criarFilho("/usuario/" + idUsuario + "/credenciais", """
@@ -381,14 +398,17 @@ class IntegracaoCrudTest {
     }
 
     @Test
-    @DisplayName("a carga inicial cria a empresa, os 3 perfis de usuario e as 2 vendas")
+    @DisplayName("a carga inicial cria a empresa, os 5 usuarios e as 2 vendas")
     void cargaInicialExecutou() throws Exception {
         String resposta = requisicao.perform(get("/usuario/usuarios"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].nome").value("Pedro Alcantara de Braganca e Bourbon"))
-                .andExpect(jsonPath("$[0].perfis[0]").value("FUNCIONARIO"))
+                .andExpect(jsonPath("$.length()").value(greaterThanOrEqualTo(5)))
+                .andExpect(jsonPath("$[0].perfis[0]").value("VENDEDOR"))
                 .andExpect(jsonPath("$[1].perfis[0]").value("FORNECEDOR"))
                 .andExpect(jsonPath("$[2].perfis[0]").value("CLIENTE"))
+                .andExpect(jsonPath("$[3].perfis[0]").value("ADMINISTRADOR"))
+                .andExpect(jsonPath("$[4].perfis[0]").value("GERENTE"))
                 .andExpect(jsonPath("$[2].documentos[0].tipo").value("CPF"))
                 .andExpect(jsonPath("$[2].credenciais[0].senha").doesNotExist())
                 .andReturn().getResponse().getContentAsString();
@@ -405,7 +425,7 @@ class IntegracaoCrudTest {
 
         requisicao.perform(get("/empresa/" + idEmpresa + "/usuarios"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.length()").value(greaterThanOrEqualTo(5)))
                 .andExpect(jsonPath("$[0].empresaId").value(idEmpresa));
     }
 
@@ -517,7 +537,7 @@ class IntegracaoCrudTest {
                 { "razaoSocial": "Outra Empresa" }
                 """);
         long idUsuario = cadastrar("""
-                { "nome": "Vinculado", "perfis": [ "FUNCIONARIO" ] }
+                { "nome": "Vinculado", "perfis": [ "VENDEDOR" ] }
                 """);
 
         requisicao.perform(get("/usuario/" + idUsuario))

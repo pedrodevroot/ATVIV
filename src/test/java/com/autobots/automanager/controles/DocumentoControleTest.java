@@ -7,6 +7,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -17,6 +18,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.Calendar;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,17 +29,27 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import com.autobots.automanager.adaptadores.UserDetailsImpl;
+import com.autobots.automanager.configuracao.SegurancaTesteConfiguracao;
 import com.autobots.automanager.conversores.DocumentoConversor;
 import com.autobots.automanager.entidades.Documento;
+import com.autobots.automanager.entidades.Usuario;
+import com.autobots.automanager.enumeracoes.PerfilUsuario;
 import com.autobots.automanager.enumeracoes.TipoDocumento;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
+import com.autobots.automanager.excecoes.RespostaSeguranca;
 import com.autobots.automanager.modelo.AdicionadorLinkDocumento;
+import com.autobots.automanager.repositorios.UsuarioRepositorio;
 import com.autobots.automanager.servicos.DocumentoServico;
 
 @WebMvcTest(DocumentoControle.class)
-@Import({ DocumentoConversor.class, AdicionadorLinkDocumento.class })
+@Import({ DocumentoConversor.class, AdicionadorLinkDocumento.class, SegurancaTesteConfiguracao.class })
+@WithMockUser(roles = "ADMINISTRADOR")
 class DocumentoControleTest {
 
     @Autowired
@@ -44,6 +57,9 @@ class DocumentoControleTest {
 
     @MockBean
     private DocumentoServico servico;
+
+    @Autowired
+    private UsuarioRepositorio usuarioRepositorio;
 
     private Documento documento(Long id, TipoDocumento tipo, String numero) {
         Documento documento = new Documento();
@@ -311,5 +327,137 @@ class DocumentoControleTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$._links").doesNotExist())
                 .andExpect(jsonPath("$.links").doesNotExist());
+    }
+
+    private Usuario usuarioComPerfil(Long id, PerfilUsuario perfil) {
+        Usuario usuario = new Usuario();
+        usuario.setId(id);
+        usuario.getPerfis().add(perfil);
+        return usuario;
+    }
+
+    private RequestPostProcessor logado(Long id, PerfilUsuario perfil) {
+        return user(new UserDetailsImpl(id, id, "usuario" + id, "hash", Set.of(perfil), true));
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /documento/{id}: 401 sem autenticacao")
+    void autorizacaoObterSemAutenticacao() throws Exception {
+        requisicao.perform(get("/documento/2"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.NAO_AUTENTICADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /documento/{id}: CLIENTE le o do proprio cadastro e recebe 200")
+    void autorizacaoClienteLeProprio() throws Exception {
+        when(usuarioRepositorio.findByDocumentosId(2L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.obterPorId(2L)).thenReturn(documento(2L, TipoDocumento.RG, "1500"));
+
+        requisicao.perform(get("/documento/2").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("GET /documento/{id}: CLIENTE le o do cadastro de outro usuario e recebe 403")
+    void autorizacaoClienteLeDeOutro() throws Exception {
+        when(usuarioRepositorio.findByDocumentosId(2L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+
+        requisicao.perform(get("/documento/2").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @DisplayName("GET /usuario/{id}/documentos: CLIENTE lista os do proprio cadastro e recebe 200")
+    void autorizacaoClienteListaDoProprio() throws Exception {
+        when(usuarioRepositorio.findById(3L)).thenReturn(Optional.of(usuarioComPerfil(3L, PerfilUsuario.CLIENTE)));
+        when(servico.listarPorUsuario(3L)).thenReturn(List.of(documento(2L, TipoDocumento.RG, "1500")));
+
+        requisicao.perform(get("/usuario/3/documentos").with(logado(3L, PerfilUsuario.CLIENTE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("PUT /documento/{id}: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteAltera() throws Exception {
+        requisicao.perform(put("/documento/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"tipo\": \"CNH\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("POST /usuario/{id}/documentos: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteCadastra() throws Exception {
+        requisicao.perform(post("/usuario/3/documentos")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"tipo\": \"CNH\", \"numero\": \"55443322\", \"dataEmissao\": \"2015-06-10\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /documento/{id}: VENDEDOR altera o de um gerente e recebe 403")
+    void autorizacaoVendedorAlteraDeGerente() throws Exception {
+        when(usuarioRepositorio.findByDocumentosId(2L)).thenReturn(Optional.of(usuarioComPerfil(2L, PerfilUsuario.GERENTE)));
+
+        requisicao.perform(put("/documento/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"tipo\": \"CNH\" }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /documento/{id}: VENDEDOR altera o de um cliente e recebe 200")
+    void autorizacaoVendedorAlteraDeCliente() throws Exception {
+        when(usuarioRepositorio.findByDocumentosId(2L)).thenReturn(Optional.of(usuarioComPerfil(4L, PerfilUsuario.CLIENTE)));
+        when(servico.atualizar(anyLong(), any(Documento.class))).thenReturn(documento(2L, TipoDocumento.RG, "1500"));
+
+        requisicao.perform(put("/documento/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"tipo\": \"CNH\" }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /documento/{id}: GERENTE altera o de um vendedor e recebe 200")
+    void autorizacaoGerenteAlteraDeVendedor() throws Exception {
+        when(usuarioRepositorio.findByDocumentosId(2L)).thenReturn(Optional.of(usuarioComPerfil(5L, PerfilUsuario.VENDEDOR)));
+        when(servico.atualizar(anyLong(), any(Documento.class))).thenReturn(documento(2L, TipoDocumento.RG, "1500"));
+
+        requisicao.perform(put("/documento/2")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"tipo\": \"CNH\" }"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /documento/{id}: GERENTE exclui o de um administrador e recebe 403")
+    void autorizacaoGerenteExcluiDeAdministrador() throws Exception {
+        when(usuarioRepositorio.findByDocumentosId(2L)).thenReturn(Optional.of(usuarioComPerfil(1L, PerfilUsuario.ADMINISTRADOR)));
+
+        requisicao.perform(delete("/documento/2"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
     }
 }

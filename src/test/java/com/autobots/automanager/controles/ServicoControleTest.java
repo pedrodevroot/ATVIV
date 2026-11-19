@@ -25,17 +25,22 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.autobots.automanager.configuracao.SegurancaTesteConfiguracao;
 import com.autobots.automanager.conversores.ServicoConversor;
 import com.autobots.automanager.entidades.Servico;
 import com.autobots.automanager.excecoes.ConflitoException;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
+import com.autobots.automanager.excecoes.RespostaSeguranca;
 import com.autobots.automanager.modelo.AdicionadorLinkServico;
 import com.autobots.automanager.servicos.ServicoServico;
 
 @WebMvcTest(ServicoControle.class)
-@Import({ ServicoConversor.class, AdicionadorLinkServico.class })
+@Import({ ServicoConversor.class, AdicionadorLinkServico.class, SegurancaTesteConfiguracao.class })
+@WithMockUser(roles = "ADMINISTRADOR")
 class ServicoControleTest {
 
     @Autowired
@@ -169,5 +174,156 @@ class ServicoControleTest {
 
         requisicao.perform(delete("/servico/20"))
                 .andExpect(status().isConflict());
+    }
+
+    private static final String CORPO_CADASTRO = """
+            { "nome": "Alinhamento", "valor": 50.00 }
+            """;
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("GET /servico/{id}: 401 sem autenticacao")
+    void autorizacaoObterSemAutenticacao() throws Exception {
+        requisicao.perform(get("/servico/20"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.NAO_AUTENTICADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithAnonymousUser
+    @DisplayName("POST /empresa/{id}/servicos: 401 sem autenticacao")
+    void autorizacaoCadastrarSemAutenticacao() throws Exception {
+        requisicao.perform(post("/empresa/1/servicos")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO_CADASTRO))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("GET /servico/{id}: VENDEDOR le e recebe 200")
+    void autorizacaoVendedorLeServico() throws Exception {
+        when(servico.obterPorId(20L)).thenReturn(novoServico(20L));
+
+        requisicao.perform(get("/servico/20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(20));
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("GET /empresa/{id}/servicos: VENDEDOR lista e recebe 200")
+    void autorizacaoVendedorListaServicos() throws Exception {
+        when(servico.listarPorEmpresa(1L)).thenReturn(List.of(novoServico(20L)));
+
+        requisicao.perform(get("/empresa/1/servicos"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("POST /empresa/{id}/servicos: VENDEDOR recebe 403 sem chamar o servico")
+    void autorizacaoVendedorCadastra() throws Exception {
+        requisicao.perform(post("/empresa/1/servicos")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO_CADASTRO))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("PUT /servico/{id}: VENDEDOR recebe 403 sem chamar o servico")
+    void autorizacaoVendedorAltera() throws Exception {
+        requisicao.perform(put("/servico/20")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"valor\": 50.00 }"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "VENDEDOR")
+    @DisplayName("DELETE /servico/{id}: VENDEDOR recebe 403 sem chamar o servico")
+    void autorizacaoVendedorExclui() throws Exception {
+        requisicao.perform(delete("/servico/20"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("POST /empresa/{id}/servicos: GERENTE cadastra e recebe 201")
+    void autorizacaoGerenteCadastra() throws Exception {
+        when(servico.criar(anyLong(), any(Servico.class))).thenReturn(novoServico(20L));
+
+        requisicao.perform(post("/empresa/1/servicos")
+                .contentType(MediaType.APPLICATION_JSON).content(CORPO_CADASTRO))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", "/servico/20"));
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("PUT /servico/{id}: GERENTE altera e recebe 200")
+    void autorizacaoGerenteAltera() throws Exception {
+        when(servico.atualizar(anyLong(), any(Servico.class))).thenReturn(novoServico(20L));
+
+        requisicao.perform(put("/servico/20")
+                .contentType(MediaType.APPLICATION_JSON).content("{ \"valor\": 50.00 }"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valor").value(50.0));
+    }
+
+    @Test
+    @WithMockUser(roles = "GERENTE")
+    @DisplayName("DELETE /servico/{id}: GERENTE exclui e recebe 204")
+    void autorizacaoGerenteExclui() throws Exception {
+        requisicao.perform(delete("/servico/20"))
+                .andExpect(status().isNoContent());
+
+        verify(servico).excluir(20L);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("GET /servico/{id}: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteLeServico() throws Exception {
+        requisicao.perform(get("/servico/20"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.mensagem").value(RespostaSeguranca.ACESSO_NEGADO));
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "CLIENTE")
+    @DisplayName("GET /empresa/{id}/servicos: CLIENTE recebe 403 sem chamar o servico")
+    void autorizacaoClienteListaServicos() throws Exception {
+        requisicao.perform(get("/empresa/1/servicos"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
+    }
+
+    @Test
+    @WithMockUser(roles = "FORNECEDOR")
+    @DisplayName("GET /servico/{id}: FORNECEDOR recebe 403 sem chamar o servico")
+    void autorizacaoFornecedorLeServico() throws Exception {
+        requisicao.perform(get("/servico/20"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(servico);
     }
 }

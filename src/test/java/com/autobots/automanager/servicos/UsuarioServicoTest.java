@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -23,7 +24,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
+import com.autobots.automanager.entidades.CredencialCodigoBarra;
 import com.autobots.automanager.entidades.CredencialUsuarioSenha;
 import com.autobots.automanager.entidades.Documento;
 import com.autobots.automanager.entidades.Email;
@@ -47,6 +50,8 @@ class UsuarioServicoTest {
     private VendaRepositorio vendaRepositorio;
     @Mock
     private UsuarioAtualizador atualizador;
+    @Mock
+    private PasswordEncoder codificador;
 
     @InjectMocks
     private UsuarioServico servico;
@@ -315,14 +320,60 @@ class UsuarioServicoTest {
     }
 
     @Test
-    @DisplayName("atualizar: recusa tirar o perfil FUNCIONARIO de quem tem vendas como funcionario")
+    @DisplayName("atualizar: recusa tirar todos os perfis de funcionario de quem tem vendas como funcionario")
     void perfilFuncionarioComVendas() {
-        when(repositorio.findById(1L)).thenReturn(Optional.of(comPerfis(PerfilUsuario.FUNCIONARIO)));
+        when(repositorio.findById(1L)).thenReturn(Optional.of(comPerfis(PerfilUsuario.VENDEDOR)));
         when(vendaRepositorio.existsByFuncionarioId(1L)).thenReturn(true);
 
-        assertThrows(ConflitoException.class, () -> servico.atualizar(comPerfis(PerfilUsuario.CLIENTE)));
+        ConflitoException excecao = assertThrows(ConflitoException.class,
+                () -> servico.atualizar(comPerfis(PerfilUsuario.CLIENTE)));
 
+        assertEquals("O usuario de id 1 possui vendas como funcionario e precisa manter um perfil de funcionario: "
+                + "ADMINISTRADOR, GERENTE ou VENDEDOR", excecao.getMessage());
         verify(repositorio, never()).save(any(Usuario.class));
+    }
+
+    @Test
+    @DisplayName("atualizar: aceita trocar VENDEDOR por GERENTE em quem tem vendas como funcionario")
+    void trocaDePerfilDeFuncionarioComVendas() {
+        Usuario existente = comPerfis(PerfilUsuario.VENDEDOR);
+        when(repositorio.findById(1L)).thenReturn(Optional.of(existente));
+        when(repositorio.save(existente)).thenReturn(existente);
+
+        servico.atualizar(comPerfis(PerfilUsuario.GERENTE));
+
+        verify(repositorio).save(existente);
+    }
+
+    @Test
+    @DisplayName("cadastrar: codifica a senha da credencial de usuario e senha")
+    void cadastrarCodificaSenha() {
+        when(repositorio.save(any(Usuario.class))).thenAnswer(chamada -> chamada.getArgument(0));
+        when(codificador.encode("segredo1")).thenReturn("codificada");
+        Usuario entrada = usuario(null, "Maria");
+        CredencialUsuarioSenha credencial = new CredencialUsuarioSenha();
+        credencial.setNomeUsuario("maria");
+        credencial.setSenha("segredo1");
+        entrada.getCredenciais().add(credencial);
+
+        Usuario salvo = servico.cadastrar(entrada);
+
+        verify(codificador).encode("segredo1");
+        assertEquals("codificada", ((CredencialUsuarioSenha) salvo.getCredenciais().get(0)).getSenha());
+    }
+
+    @Test
+    @DisplayName("cadastrar: nao usa o codificador para credencial de codigo de barras")
+    void cadastrarNaoCodificaCodigoDeBarras() {
+        when(repositorio.save(any(Usuario.class))).thenAnswer(chamada -> chamada.getArgument(0));
+        Usuario entrada = usuario(null, "Maria");
+        CredencialCodigoBarra credencial = new CredencialCodigoBarra();
+        credencial.setCodigo(123456L);
+        entrada.getCredenciais().add(credencial);
+
+        servico.cadastrar(entrada);
+
+        verifyNoInteractions(codificador);
     }
 
     @Test

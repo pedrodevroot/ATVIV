@@ -4,14 +4,17 @@ import java.util.Calendar;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.autobots.automanager.dtos.CredencialAtualizacaoDto;
 import com.autobots.automanager.entidades.Credencial;
+import com.autobots.automanager.entidades.CredencialUsuarioSenha;
 import com.autobots.automanager.entidades.Usuario;
 import com.autobots.automanager.excecoes.RecursoNaoEncontradoException;
 import com.autobots.automanager.modelo.CredencialAtualizador;
+import com.autobots.automanager.modelo.StringVerificadorNulo;
 import com.autobots.automanager.repositorios.CredencialRepositorio;
 import com.autobots.automanager.repositorios.UsuarioRepositorio;
 
@@ -24,6 +27,10 @@ public class CredencialServico {
     private UsuarioRepositorio usuarioRepositorio;
     @Autowired
     private CredencialAtualizador atualizador;
+    @Autowired
+    private PasswordEncoder codificador;
+
+    private StringVerificadorNulo verificador = new StringVerificadorNulo();
 
     public List<Credencial> listarPorUsuario(long usuarioId) {
         return obterUsuario(usuarioId).getCredenciais();
@@ -35,6 +42,9 @@ public class CredencialServico {
         credencial.setId(null);
         credencial.setCriacao(Calendar.getInstance().getTime());
         credencial.setInativo(false);
+        if (credencial instanceof CredencialUsuarioSenha usuarioSenha) {
+            usuarioSenha.setSenha(codificador.encode(usuarioSenha.getSenha()));
+        }
         Credencial criada = repositorio.save(credencial);
         usuario.getCredenciais().add(criada);
         usuarioRepositorio.save(usuario);
@@ -50,6 +60,10 @@ public class CredencialServico {
     public Credencial atualizar(long id, CredencialAtualizacaoDto atualizacao) {
         Credencial credencial = obterPorId(id);
         atualizador.atualizar(credencial, atualizacao);
+        if (credencial instanceof CredencialUsuarioSenha usuarioSenha
+                && !verificador.verificar(atualizacao.getSenha())) {
+            usuarioSenha.setSenha(codificador.encode(atualizacao.getSenha()));
+        }
         return repositorio.save(credencial);
     }
 
